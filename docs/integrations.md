@@ -31,13 +31,15 @@ The first migration is:
 supabase/migrations/001_initial_schema.sql
 ```
 
-Private business tables use explicit grants and Row Level Security. The application server uses `SUPABASE_SERVICE_ROLE_KEY` only on the server. The browser does not receive this key and does not query private tables directly.
+Private business tables use explicit grants and Row Level Security. The server uses `DATABASE_URL` (the Supabase PostgreSQL Pooler URL) as the primary data path. `SUPABASE_SERVICE_ROLE_KEY` is retained only as a compatibility fallback. The browser does not receive either secret and does not query private tables directly. The password placeholder must be replaced only inside a secret environment variable; it must never be committed to GitHub.
 
 ## Deferred secrets
 
 The following are intentionally not committed:
 
+- `DATABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `ADMIN_ACCESS_TOKEN`
 - `TELEGRAM_BOT_TOKEN`
 - `GEMINI_API_KEY_1` through `GEMINI_API_KEY_5`
 - `USDT_RECEIVING_ADDRESS`
