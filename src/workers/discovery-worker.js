@@ -1,12 +1,17 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
+import pg from 'pg';
 import { fetchHackerNewsCandidates, fetchBlueskyCandidates, deduplicateCandidates } from '../discovery/public-sources.js';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = supabaseUrl && supabaseServiceKey
   ? createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } })
+  : null;
+const databaseUrl = process.env.DATABASE_URL?.trim();
+const pgPool = databaseUrl
+  ? new pg.Pool({ connectionString: databaseUrl, max: Number(process.env.DB_POOL_MAX || 5), idleTimeoutMillis: 30_000, connectionTimeoutMillis: 8_000, ssl: databaseUrl.includes('supabase.com') ? { rejectUnauthorized: false } : undefined })
   : null;
 
 function hashContent(item) {
@@ -15,7 +20,7 @@ function hashContent(item) {
 
 async function saveCandidates(items) {
   const normalized = deduplicateCandidates(items);
-  if (!supabase) return { discovered: normalized.length, stored: 0, mode: 'dry-run' };
+  if (!pgPool && !supabase) return { discovered: normalized.length, stored: 0, mode: 'dry-run' };
 
   const sourceRows = normalized.map((item) => ({
     source: item.source,
@@ -29,22 +34,36 @@ async function saveCandidates(items) {
     processed: false
   }));
 
-  const { data: storedRows, error: sourceError } = await supabase
-    .from('source_items')
-    .upsert(sourceRows, { onConflict: 'source,content_hash', ignoreDuplicates: true })
-    .select('id,source,external_id,source_url');
-  if (sourceError) throw sourceError;
+  if (pgPool) {
+    const client = await pgPool.connect();
+    try {
+      await client.query('begin');
+      const storedRows = [];
+      for (const row of sourceRows) {
+        const result = await client.query('insert into public.source_items (source, external_id, source_url, title, body, author_handle, published_at, content_hash, processed) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (source, content_hash) do nothing returning id, source, external_id, source_url', [row.source, row.external_id, row.source_url, row.title, row.body, row.author_handle, row.published_at, row.content_hash, false]);
+        if (result.rows[0]) storedRows.push(result.rows[0]);
+      }
+      for (const row of storedRows) {
+        await client.query('insert into public.jobs (job_type, dedupe_key, payload) values ($1,$2,$3::jsonb) on conflict (dedupe_key) do nothing', ['lead_analyze', `lead_analyze:${row.source}:${row.external_id || row.source_url}`, JSON.stringify({ sourceItemId: row.id })]);
+      }
+      await client.query('commit');
+      return { discovered: normalized.length, stored: storedRows.length, mode: 'postgres' };
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 
-  const jobs = (storedRows || []).map((row) => ({
-    job_type: 'lead_analyze',
-    dedupe_key: `lead_analyze:${row.source}:${row.external_id || row.source_url}`,
-    payload: { sourceItemId: row.id }
-  }));
+  const { data: storedRows, error: sourceError } = await supabase.from('source_items').upsert(sourceRows, { onConflict: 'source,content_hash', ignoreDuplicates: true }).select('id,source,external_id,source_url');
+  if (sourceError) throw sourceError;
+  const jobs = (storedRows || []).map((row) => ({ job_type: 'lead_analyze', dedupe_key: `lead_analyze:${row.source}:${row.external_id || row.source_url}`, payload: { sourceItemId: row.id } }));
   if (jobs.length) {
     const { error: jobError } = await supabase.from('jobs').upsert(jobs, { onConflict: 'dedupe_key', ignoreDuplicates: true });
     if (jobError) throw jobError;
   }
-  return { discovered: normalized.length, stored: storedRows?.length || 0, mode: 'supabase' };
+  return { discovered: normalized.length, stored: storedRows?.length || 0, mode: 'supabase-rest' };
 }
 
 export async function runDiscovery({ fetchImpl = fetch } = {}) {
