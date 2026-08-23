@@ -9,7 +9,7 @@
     "start": "node server.js",
     "worker:discovery": "node src/workers/discovery-worker.js",
     "db:check": "node scripts/check-db.js",
-    "check": "node --check server.js && node --check src/integrations/gemini-router.js && node --check src/integrations/telegram-bot.js && node --check src/integrations/usdt-verifier.js && node --check src/discovery/public-sources.js",
+    "check": "node --check server.js && node --check src/integrations/gemini-router.js && node --check src/integrations/telegram-bot.js && node --check src/integrations/usdt-verifier.js && node --check src/discovery/public-sources.js && node --check src/delivery/download-token.js && node --check src/workers/discovery-worker.js",
     "test": "node --test test/core.test.js"
   },
   "dependencies": {
