@@ -10,6 +10,8 @@ import { GeminiRouter } from './src/integrations/gemini-router.js';
 import { TelegramBot } from './src/integrations/telegram-bot.js';
 import { UsdtVerifier } from './src/integrations/usdt-verifier.js';
 import { requireAdmin } from './src/auth/admin-auth.js';
+import { hashDownloadToken, isTokenExpired } from './src/delivery/download-token.js';
+import { productBundles } from './src/delivery/product-manifest.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -191,6 +193,35 @@ app.post('/api/orders', async (req, res) => {
   } catch (error) {
     console.error('order creation failed', error);
     return res.status(500).json({ ok: false, error: 'The order could not be created.' });
+  }
+});
+
+app.get('/api/download/:token', async (req, res) => {
+  const token = cleanText(req.params.token, 128);
+  if (!token || (!pgPool && !supabase)) return res.status(404).json({ ok: false, error: 'Download not available.' });
+  const tokenHash = hashDownloadToken(token);
+  try {
+    let order;
+    if (pgPool) {
+      const result = await pgPool.query('select o.order_number, o.download_expires_at, p.slug from public.orders o join public.products p on p.id = o.product_id where o.download_token_hash = $1 and o.status = $2 limit 1', [tokenHash, 'paid']);
+      order = result.rows[0];
+    } else {
+      const { data, error } = await supabase.from('orders').select('order_number,download_expires_at,product_id,status').eq('download_token_hash', tokenHash).eq('status', 'paid').limit(1).maybeSingle();
+      if (error) throw error;
+      if (data) {
+        const { data: product, error: productError } = await supabase.from('products').select('slug').eq('id', data.product_id).limit(1).maybeSingle();
+        if (productError) throw productError;
+        order = { ...data, slug: product?.slug };
+      }
+    }
+    if (!order || !productBundles[order.slug]) return res.status(404).json({ ok: false, error: 'Download not found or not yet authorized.' });
+    if (isTokenExpired(order.download_expires_at)) return res.status(410).json({ ok: false, error: 'This download link has expired.' });
+    const bundle = productBundles[order.slug];
+    const filePath = path.join(__dirname, 'product-assets', 'bundles', bundle.file);
+    return res.download(filePath, bundle.downloadName);
+  } catch (error) {
+    console.error('download failed', error);
+    return res.status(500).json({ ok: false, error: 'The download could not be completed.' });
   }
 });
 
