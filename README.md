@@ -9,7 +9,8 @@ A small, English-first digital product storefront for the **Client Payment & Sco
 - Responsive landing page, pricing cards, free-sample intake form, and health endpoint.
 - Supabase schema for products, orders, invoices, payments, leads, source items, analyses, outreach messages, jobs, and audit logs.
 - Private-by-default database permissions with Row Level Security and server-side service-role access only.
-- No Gemini, Telegram, wallet, or external source secrets committed to the repository.
+- Gemini, Telegram, and USDT integration modules are present as secret-free adapters; no real credentials are committed to the repository.
+- Public-source discovery adapters for Hacker News, Bluesky, and RSS are present for later worker scheduling.
 
 ## Local development
 
@@ -37,6 +38,15 @@ Required later integrations:
 - `USDT_RECEIVING_ADDRESS`
 
 The five Gemini keys are for reliability and controlled rotation, not for bypassing provider quotas or terms. The application will record key health, apply per-key limits, and stop or fall back to deterministic rules when no key is available.
+
+## Integration modules
+
+- `src/integrations/gemini-router.js` rotates up to five configured Gemini API keys with local failure backoff and no key values in code.
+- `src/integrations/telegram-bot.js` provides webhook and message helpers while remaining disabled without `TELEGRAM_BOT_TOKEN`.
+- `src/integrations/usdt-verifier.js` validates invoice data and transaction results through a provider adapter; it never handles a private key.
+- `src/discovery/public-sources.js` includes public Hacker News, Bluesky, and RSS candidate collectors with keyword filtering, deduplication, and a deterministic fit score.
+
+These modules are intentionally not connected to real accounts yet. They can be tested with injected adapters before production credentials are added.
 
 ## Database
 
@@ -78,6 +88,9 @@ The discovery worker will not scrape private data, bypass CAPTCHAs, create fake 
 
 ```bash
 npm run check
+npm test
 ```
 
-The current repository is the foundation only. Telegram, Gemini, source connectors, payment verification, file storage, authentication, and production download links will be added as separate tested modules.
+The test suite covers candidate scoring, deduplication, RSS parsing, unsupported payment networks, and the rule that a TxID alone never counts as a confirmed payment.
+
+The repository now contains the foundation and tested secret-free adapters. Real Telegram credentials, Gemini keys, wallet settings, source schedules, file storage, authentication, and production download links remain controlled integration steps.
