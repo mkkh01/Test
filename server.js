@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { GeminiRouter } from './src/integrations/gemini-router.js';
 import { TelegramBot } from './src/integrations/telegram-bot.js';
 import { UsdtVerifier } from './src/integrations/usdt-verifier.js';
+import { requireAdmin } from './src/auth/admin-auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -78,6 +79,18 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/products', (_req, res) => {
   res.json({ products });
+});
+
+app.get('/api/admin/summary', requireAdmin, async (_req, res) => {
+  if (!supabase) return res.status(503).json({ ok: false, error: 'Supabase is not configured.' });
+  const tables = ['intake_submissions', 'orders', 'invoices', 'payments', 'leads', 'outreach_messages'];
+  const counts = {};
+  for (const table of tables) {
+    const { count, error } = await supabase.from(table).select('id', { count: 'exact', head: true });
+    if (error) return res.status(500).json({ ok: false, error: 'Could not load admin summary.' });
+    counts[table] = count || 0;
+  }
+  return res.json({ ok: true, counts, generatedAt: new Date().toISOString() });
 });
 
 app.post('/api/orders', async (req, res) => {

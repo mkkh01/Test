@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Summary — Client Protection Kit</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .admin-card { max-width: 720px; margin: 48px auto; }
+    .admin-form { display: flex; gap: 10px; margin-top: 18px; }
+    .admin-form input { flex: 1; padding: 12px; border: 1px solid #ced6e3; border-radius: 8px; font: inherit; }
+    .admin-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 22px; }
+    .admin-metric { padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .admin-metric small { color: var(--muted); display: block; }
+    .admin-metric strong { font-size: 1.8rem; color: var(--navy); }
+    @media (max-width: 640px) { .admin-form, .admin-grid { grid-template-columns: 1fr; display: grid; } }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <section class="hero"><h1>Admin Summary</h1><p>Private operational overview. Use only from a trusted device.</p></section>
+    <section class="card admin-card">
+      <h2>Authenticate</h2>
+      <p class="helper">Enter the Admin access token configured in the server environment. This page does not store it.</p>
+      <form id="adminForm" class="admin-form"><input id="adminToken" type="password" autocomplete="off" placeholder="Admin access token" required><button class="button primary" type="submit">Load summary</button></form>
+      <p id="status" class="form-status" role="status"></p>
+      <div id="metrics" class="admin-grid"></div>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById('adminForm');
+    const token = document.getElementById('adminToken');
+    const status = document.getElementById('status');
+    const metrics = document.getElementById('metrics');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      status.textContent = 'Loading…';
+      metrics.replaceChildren();
+      try {
+        const response = await fetch('/api/admin/summary', { headers: { 'x-admin-token': token.value } });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Unable to load summary.');
+        for (const [label, value] of Object.entries(result.counts)) {
+          const card = document.createElement('div');
+          card.className = 'admin-metric';
+          card.innerHTML = `<small>${label.replaceAll('_', ' ')}</small><strong>${value}</strong>`;
+          metrics.append(card);
+        }
+        status.textContent = `Updated ${new Date(result.generatedAt).toLocaleString()}`;
+        status.style.color = '#0d8b65';
+      } catch (error) {
+        status.textContent = error.message;
+        status.style.color = '#b42318';
+      }
+    });
+  </script>
+</body>
+</html>

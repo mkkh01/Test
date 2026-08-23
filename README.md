@@ -6,7 +6,7 @@ A small, English-first digital product storefront for the **Client Payment & Sco
 
 - Express web server suitable for Render.
 - English storefront with Starter, Complete, and Agency product tiers.
-- Responsive landing page, pricing cards, free-sample intake form, and health endpoint.
+- Responsive landing page, pricing cards, free-sample intake form, checkout form, admin summary page, and health endpoint.
 - Supabase schema for products, orders, invoices, payments, leads, source items, analyses, outreach messages, jobs, and audit logs.
 - Private-by-default database permissions with Row Level Security and server-side service-role access only.
 - Gemini, Telegram, and USDT integration modules are present as secret-free adapters; no real credentials are committed to the repository.
@@ -38,6 +38,10 @@ Required later integrations:
 - `USDT_RECEIVING_ADDRESS`
 
 The five Gemini keys are for reliability and controlled rotation, not for bypassing provider quotas or terms. The application will record key health, apply per-key limits, and stop or fall back to deterministic rules when no key is available.
+
+## Admin summary
+
+Open `/admin.html` only from a trusted device after setting `ADMIN_ACCESS_TOKEN` in the server environment. The page shows aggregate counts and sends the token in an HTTP header; it does not persist the token in browser storage. The admin route does not expose customer rows or secrets.
 
 ## Integration modules
 

@@ -13,6 +13,8 @@ services:
         value: https://attihpianzukswsfjoab.supabase.co
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: ADMIN_ACCESS_TOKEN
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: GEMINI_API_KEY_COUNT
