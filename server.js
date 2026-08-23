@@ -3,6 +3,7 @@ import express from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import { createClient } from '@supabase/supabase-js';
+import pg from 'pg';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GeminiRouter } from './src/integrations/gemini-router.js';
@@ -19,6 +20,10 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = supabaseUrl && supabaseServiceKey
   ? createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } })
+  : null;
+const databaseUrl = process.env.DATABASE_URL?.trim();
+const pgPool = databaseUrl
+  ? new pg.Pool({ connectionString: databaseUrl, max: Number(process.env.DB_POOL_MAX || 5), idleTimeoutMillis: 30_000, connectionTimeoutMillis: 8_000, ssl: databaseUrl.includes('supabase.com') ? { rejectUnauthorized: false } : undefined })
   : null;
 const geminiRouter = new GeminiRouter();
 const telegramBot = new TelegramBot();
@@ -65,41 +70,80 @@ function isEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+async function getProductBySlug(slug) {
+  if (pgPool) {
+    const result = await pgPool.query('select id, slug, price_usdt from public.products where slug = $1 and active = true limit 1', [slug]);
+    return result.rows[0] || null;
+  }
+  if (supabase) {
+    const { data, error } = await supabase.from('products').select('id,slug,price_usdt').eq('slug', slug).eq('active', true).limit(1).maybeSingle();
+    if (error) throw error;
+    return data;
+  }
+  return null;
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'client-payment-scope-protection-platform',
     environment: process.env.NODE_ENV || 'development',
     supabaseConfigured: Boolean(supabase),
+    postgresConfigured: Boolean(pgPool),
+    dataStore: pgPool ? 'postgres' : supabase ? 'supabase-rest' : 'demo',
     telegramConfigured: telegramBot.configured,
     geminiKeyCount: geminiRouter.keys.length,
     usdtConfigured: usdtVerifier.configured
   });
 });
 
-app.get('/api/products', (_req, res) => {
-  res.json({ products });
+app.get('/api/products', async (_req, res) => {
+  try {
+    if (pgPool) {
+      const result = await pgPool.query('select slug, name, tagline, price_usdt, tier from public.products where active = true order by sort_order asc limit 50');
+      return res.json({ products: result.rows.map((row) => ({ ...row, priceUsdt: Number(row.price_usdt) })) });
+    }
+    if (supabase) {
+      const { data, error } = await supabase.from('products').select('slug,name,tagline,price_usdt,tier').eq('active', true).order('sort_order', { ascending: true }).limit(50);
+      if (error) throw error;
+      return res.json({ products: data.map((row) => ({ ...row, priceUsdt: Number(row.price_usdt) })) });
+    }
+    return res.json({ products });
+  } catch (error) {
+    console.error('product list failed', error);
+    return res.status(500).json({ ok: false, error: 'Products are temporarily unavailable.' });
+  }
 });
 
 app.get('/api/admin/summary', requireAdmin, async (_req, res) => {
-  if (!supabase) return res.status(503).json({ ok: false, error: 'Supabase is not configured.' });
+  if (!pgPool && !supabase) return res.status(503).json({ ok: false, error: 'Database is not configured.' });
   const tables = ['intake_submissions', 'orders', 'invoices', 'payments', 'leads', 'outreach_messages'];
   const counts = {};
-  for (const table of tables) {
-    const { count, error } = await supabase.from(table).select('id', { count: 'exact', head: true });
-    if (error) return res.status(500).json({ ok: false, error: 'Could not load admin summary.' });
-    counts[table] = count || 0;
+  try {
+    for (const table of tables) {
+      if (pgPool) {
+        const result = await pgPool.query(`select count(*)::int as count from public.${table}`);
+        counts[table] = result.rows[0]?.count || 0;
+      } else {
+        const { count, error } = await supabase.from(table).select('id', { count: 'exact', head: true });
+        if (error) throw error;
+        counts[table] = count || 0;
+      }
+    }
+    return res.json({ ok: true, counts, generatedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error('admin summary failed', error);
+    return res.status(500).json({ ok: false, error: 'Could not load admin summary.' });
   }
-  return res.json({ ok: true, counts, generatedAt: new Date().toISOString() });
 });
 
 app.post('/api/orders', async (req, res) => {
   const productSlug = cleanText(req.body.productSlug, 120);
   const customerEmail = cleanText(req.body.email, 180).toLowerCase();
   const customerName = cleanText(req.body.name, 120);
-  const product = products.find((item) => item.slug === productSlug);
+  const staticProduct = products.find((item) => item.slug === productSlug);
 
-  if (!product || !isEmail(customerEmail)) {
+  if (!staticProduct || !isEmail(customerEmail)) {
     return res.status(400).json({ ok: false, error: 'Choose a valid product and enter a valid email.' });
   }
 
@@ -112,48 +156,42 @@ app.post('/api/orders', async (req, res) => {
   const orderNumber = `CPK-${Date.now().toString(36).toUpperCase()}`;
   const invoiceNumber = `INV-${Date.now().toString(36).toUpperCase()}`;
   const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  const amountUsdt = staticProduct.priceUsdt;
 
-  if (!supabase) {
-    return res.status(202).json({
-      ok: true,
-      stored: false,
-      order: { orderNumber, invoiceNumber, product: product.slug, amountUsdt: product.priceUsdt, network, receivingAddress, expiresAt, status: 'awaiting_payment' }
-    });
+  if (!pgPool && !supabase) {
+    return res.status(202).json({ ok: true, stored: false, order: { orderNumber, invoiceNumber, product: staticProduct.slug, amountUsdt, network, receivingAddress, expiresAt, status: 'awaiting_payment' } });
   }
 
-  const { data: dbProduct, error: productError } = await supabase
-    .from('products')
-    .select('id,slug,price_usdt')
-    .eq('slug', product.slug)
-    .limit(1)
-    .maybeSingle();
-
-  if (productError || !dbProduct) {
-    console.error('product lookup failed', productError);
-    return res.status(500).json({ ok: false, error: 'The selected product is not available.' });
-  }
-
-  const { data: order, error: orderError } = await supabase
-    .from('orders')
-    .insert({ order_number: orderNumber, product_id: dbProduct.id, customer_email: customerEmail, customer_name: customerName || null, amount_usdt: product.priceUsdt, network, receiving_address: receivingAddress, status: 'awaiting_payment' })
-    .select('id,order_number,amount_usdt,network,receiving_address,status')
-    .single();
-
-  if (orderError) {
-    console.error('order insert failed', orderError);
+  try {
+    if (pgPool) {
+      const client = await pgPool.connect();
+      try {
+        await client.query('begin');
+        const productResult = await client.query('select id, slug, price_usdt from public.products where slug = $1 and active = true limit 1', [staticProduct.slug]);
+        const dbProduct = productResult.rows[0];
+        if (!dbProduct) throw new Error('The selected product is not available.');
+        const orderResult = await client.query('insert into public.orders (order_number, product_id, customer_email, customer_name, amount_usdt, network, receiving_address, status) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id', [orderNumber, dbProduct.id, customerEmail, customerName || null, amountUsdt, network, receivingAddress, 'awaiting_payment']);
+        await client.query('insert into public.invoices (order_id, invoice_number, amount_usdt, network, receiving_address, expires_at, status) values ($1,$2,$3,$4,$5,$6,$7)', [orderResult.rows[0].id, invoiceNumber, amountUsdt, network, receivingAddress, expiresAt, 'open']);
+        await client.query('commit');
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      } finally {
+        client.release();
+      }
+    } else {
+      const dbProduct = await getProductBySlug(staticProduct.slug);
+      if (!dbProduct) return res.status(500).json({ ok: false, error: 'The selected product is not available.' });
+      const { data: order, error: orderError } = await supabase.from('orders').insert({ order_number: orderNumber, product_id: dbProduct.id, customer_email: customerEmail, customer_name: customerName || null, amount_usdt: amountUsdt, network, receiving_address: receivingAddress, status: 'awaiting_payment' }).select('id').single();
+      if (orderError) throw orderError;
+      const { error: invoiceError } = await supabase.from('invoices').insert({ order_id: order.id, invoice_number: invoiceNumber, amount_usdt: amountUsdt, network, receiving_address: receivingAddress, expires_at: expiresAt, status: 'open' });
+      if (invoiceError) throw invoiceError;
+    }
+    return res.status(201).json({ ok: true, stored: true, order: { orderNumber, invoiceNumber, product: staticProduct.slug, amountUsdt, network, receivingAddress, expiresAt, status: 'awaiting_payment' } });
+  } catch (error) {
+    console.error('order creation failed', error);
     return res.status(500).json({ ok: false, error: 'The order could not be created.' });
   }
-
-  const { error: invoiceError } = await supabase
-    .from('invoices')
-    .insert({ order_id: order.id, invoice_number: invoiceNumber, amount_usdt: product.priceUsdt, network, receiving_address: receivingAddress, expires_at: expiresAt, status: 'open' });
-
-  if (invoiceError) {
-    console.error('invoice insert failed', invoiceError);
-    return res.status(500).json({ ok: false, error: 'The invoice could not be created.' });
-  }
-
-  return res.status(201).json({ ok: true, stored: true, order: { orderNumber, invoiceNumber, product: product.slug, amountUsdt: product.priceUsdt, network, receivingAddress, expiresAt, status: 'awaiting_payment' } });
 });
 
 app.post('/api/intake', async (req, res) => {
@@ -184,17 +222,22 @@ app.post('/api/intake', async (req, res) => {
     status: 'new'
   };
 
-  if (!supabase) {
+  if (!pgPool && !supabase) {
     return res.status(202).json({ ok: true, stored: false, message: 'Submission accepted in demo mode.' });
   }
 
-  const { error } = await supabase.from('intake_submissions').insert(submission);
-  if (error) {
+  try {
+    if (pgPool) {
+      await pgPool.query('insert into public.intake_submissions (full_name, email, company, business_type, current_situation, desired_outcome, budget, contact_method, source, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [submission.full_name, submission.email, submission.company, submission.business_type, submission.current_situation, submission.desired_outcome, submission.budget, submission.contact_method, submission.source, submission.status]);
+    } else {
+      const { error } = await supabase.from('intake_submissions').insert(submission);
+      if (error) throw error;
+    }
+    return res.status(201).json({ ok: true, stored: true, message: 'Submission received.' });
+  } catch (error) {
     console.error('intake insert failed', error);
     return res.status(500).json({ ok: false, error: 'The submission could not be stored.' });
   }
-
-  return res.status(201).json({ ok: true, stored: true, message: 'Submission received.' });
 });
 
 app.use((_req, res) => {

@@ -7,7 +7,7 @@ A small, English-first digital product storefront for the **Client Payment & Sco
 - Express web server suitable for Render.
 - English storefront with Starter, Complete, and Agency product tiers.
 - Responsive landing page, pricing cards, free-sample intake form, checkout form, admin summary page, and health endpoint.
-- Supabase schema for products, orders, invoices, payments, leads, source items, analyses, outreach messages, jobs, and audit logs.
+- Supabase PostgreSQL schema for products, orders, invoices, payments, leads, source items, analyses, outreach messages, jobs, and audit logs.
 - Private-by-default database permissions with Row Level Security and server-side service-role access only.
 - Gemini, Telegram, and USDT integration modules are present as secret-free adapters; no real credentials are committed to the repository.
 - Public-source discovery adapters for Hacker News, Bluesky, and RSS are present, with a Supabase-backed discovery worker ready for later Render worker scheduling.
@@ -31,7 +31,9 @@ The repository includes `render.yaml` for the first web service. Configure the s
 Required later integrations:
 
 - `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `DATABASE_URL` (Supabase PostgreSQL Pooler; primary server-side data path)
+- `DB_POOL_MAX`
+- `SUPABASE_SERVICE_ROLE_KEY` (compatibility fallback)
 - `TELEGRAM_BOT_TOKEN`
 - `GEMINI_API_KEY_1` through `GEMINI_API_KEY_5`
 - `USDT_NETWORK`
@@ -61,7 +63,7 @@ The initial migration is at:
 supabase/migrations/001_initial_schema.sql
 ```
 
-It has been applied to the confirmed Supabase project. The server uses the service role only on the backend. Client-facing database access is not enabled for private business tables.
+It has been applied to the confirmed Supabase project. The server is configured to use `DATABASE_URL` and the Supabase PostgreSQL Pooler as its primary data path. `SUPABASE_SERVICE_ROLE_KEY` remains a compatibility fallback for environments where the direct database URL is not configured. Client-facing database access is not enabled for private business tables.
 
 ## Product flow
 

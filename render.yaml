@@ -11,6 +11,10 @@ services:
         value: production
       - key: SUPABASE_URL
         value: https://attihpianzukswsfjoab.supabase.co
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_POOL_MAX
+        value: "5"
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: ADMIN_ACCESS_TOKEN
