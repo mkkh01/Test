@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: client-payment-scope-protection
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY_COUNT
+        value: "0"
+      - key: USDT_NETWORK
+        value: TRC20
+      - key: USDT_RECEIVING_ADDRESS
+        sync: false
