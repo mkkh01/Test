@@ -461,7 +461,7 @@ app.post('/api/orders', rateLimit('order-create', 10, 60 * 60 * 1000), async (re
   const statusToken = createDownloadToken();
   const statusTokenHash = hashDownloadToken(statusToken);
   const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-  const amountUsdt = staticProduct.priceUsdt;
+  let amountUsdt = staticProduct.priceUsdt;
   try {
     if (pgPool) {
       const client = await pgPool.connect();
@@ -470,6 +470,7 @@ app.post('/api/orders', rateLimit('order-create', 10, 60 * 60 * 1000), async (re
         const productResult = await client.query('select id, slug, price_usdt from public.products where slug = $1 and active = true limit 1', [staticProduct.slug]);
         const dbProduct = productResult.rows[0];
         if (!dbProduct) throw new Error('The selected product is not available.');
+        amountUsdt = Number(dbProduct.price_usdt);
         const orderResult = await client.query('insert into public.orders (order_number, product_id, customer_email, customer_name, amount_usdt, network, receiving_address, status, access_token_hash) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id', [orderNumber, dbProduct.id, customerEmail, customerName || null, amountUsdt, config.network, config.receivingAddress, 'awaiting_payment', statusTokenHash]);
         await client.query('insert into public.invoices (order_id, invoice_number, amount_usdt, network, receiving_address, expires_at, status) values ($1,$2,$3,$4,$5,$6,$7)', [orderResult.rows[0].id, invoiceNumber, amountUsdt, config.network, config.receivingAddress, expiresAt, 'open']);
         await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['customer', 'order_created', 'order', orderResult.rows[0].id, JSON.stringify({ orderNumber, product: staticProduct.slug })]);
@@ -483,6 +484,7 @@ app.post('/api/orders', rateLimit('order-create', 10, 60 * 60 * 1000), async (re
     } else {
       const dbProduct = await getProductBySlug(staticProduct.slug);
       if (!dbProduct) return res.status(500).json({ ok: false, error: 'The selected product is not available.' });
+      amountUsdt = Number(dbProduct.price_usdt);
       const { data: order, error: orderError } = await supabase.from('orders').insert({ order_number: orderNumber, product_id: dbProduct.id, customer_email: customerEmail, customer_name: customerName || null, amount_usdt: amountUsdt, network: config.network, receiving_address: config.receivingAddress, status: 'awaiting_payment', access_token_hash: statusTokenHash }).select('id').single();
       if (orderError) throw orderError;
       const { error: invoiceError } = await supabase.from('invoices').insert({ order_id: order.id, invoice_number: invoiceNumber, amount_usdt: amountUsdt, network: config.network, receiving_address: config.receivingAddress, expires_at: expiresAt, status: 'open' });

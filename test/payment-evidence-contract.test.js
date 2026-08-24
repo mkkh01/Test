@@ -16,4 +16,7 @@ const client = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'ut
   assert.match(server, /manual_review/);
   assert.match(storefront, /id="evidenceForm"/);
   assert.match(client, /fileToDataUrl/);
+  assert.match(server, /amountUsdt = Number\(dbProduct\.price_usdt\)/);
+  assert.match(client, /fetch\('\/api\/products'/);
+  assert.match(storefront, /data-product-price="starter"/);
 });

@@ -23,10 +23,30 @@ const downloadLink = document.getElementById('downloadLink');
 const formStatus = document.getElementById('formStatus');
 
 const productLabels = {
-  starter: { slug: 'client-payment-scope-protection-starter', label: 'Starter — 3 USDT' },
-  complete: { slug: 'client-payment-scope-protection-complete', label: 'Complete — 7 USDT' },
-  agency: { slug: 'client-payment-scope-protection-agency', label: 'Agency — 12 USDT' }
+  starter: { slug: 'client-payment-scope-protection-starter', label: 'Starter — 3 USDT', priceUsdt: 3 },
+  complete: { slug: 'client-payment-scope-protection-complete', label: 'Complete — 7 USDT', priceUsdt: 7 },
+  agency: { slug: 'client-payment-scope-protection-agency', label: 'Agency — 12 USDT', priceUsdt: 12 }
 };
+
+async function loadLiveProductPrices() {
+  try {
+    const response = await fetch('/api/products', { cache: 'no-store' });
+    if (!response.ok) return;
+    const result = await response.json();
+    const bySlug = new Map((result.products || []).map((product) => [product.slug, product]));
+    for (const [key, product] of Object.entries(productLabels)) {
+      const live = bySlug.get(product.slug);
+      if (!live) continue;
+      product.priceUsdt = Number(live.priceUsdt ?? live.price_usdt);
+      product.label = `${live.tier} — ${product.priceUsdt} USDT`;
+      document.querySelector(`[data-product-price="${key}"]`)?.replaceChildren(document.createTextNode(String(product.priceUsdt)));
+    }
+  } catch (_error) {
+    // The server remains the source of truth if the price refresh fails.
+  }
+}
+
+loadLiveProductPrices();
 
 let activeOrder = null;
 let statusPollTimer = null;
