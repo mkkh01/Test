@@ -76,6 +76,18 @@ function isEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+function publicBaseUrl() {
+  const configured = cleanText(process.env.PUBLIC_BASE_URL, 300).replace(/\/$/, '');
+  if (!configured || configured.toLowerCase().includes('public_base_url')) return 'https://test-p2h3.onrender.com';
+  try {
+    const parsed = new URL(configured);
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) return 'https://test-p2h3.onrender.com';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return 'https://test-p2h3.onrender.com';
+  }
+}
+
 function hasDatabase() {
   return Boolean(pgPool || supabase);
 }
@@ -757,8 +769,7 @@ app.post('/api/intake', rateLimit('intake-submit', 6, 60 * 60 * 1000), async (re
     const allowedInCurrentMode = !resendProvider.testMode || email === resendProvider.testTo;
     if (wantsEmail && resendProvider.configured && allowedInCurrentMode) {
       try {
-        const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://test-p2h3.onrender.com').replace(/\/$/, '');
-        await resendProvider.sendSampleEmail({ to: submission.email, fullName: submission.full_name, issue: submission.business_type, previewUrl: `${baseUrl}/preview` });
+        await resendProvider.sendSampleEmail({ to: submission.email, fullName: submission.full_name, issue: submission.business_type, previewUrl: `${publicBaseUrl()}/preview` });
         emailStatus = 'sent';
       } catch (error) {
         emailStatus = 'failed';
