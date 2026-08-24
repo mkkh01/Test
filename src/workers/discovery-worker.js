@@ -2,7 +2,7 @@ import 'dotenv/config';
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import pg from 'pg';
-import { fetchHackerNewsCandidates, fetchBlueskyCandidates, deduplicateCandidates } from '../discovery/public-sources.js';
+import { fetchHackerNewsCandidates, fetchBlueskyCandidates, fetchDevToCandidates, fetchStackOverflowCandidates, deduplicateCandidates } from '../discovery/public-sources.js';
 
 const configuredSupabaseValue = process.env.SUPABASE_URL?.trim() || '';
 const supabaseUrl = configuredSupabaseValue.startsWith('http://') || configuredSupabaseValue.startsWith('https://') ? configuredSupabaseValue : '';
@@ -72,11 +72,13 @@ export async function closeDiscoveryWorker() {
 }
 
 export async function runDiscovery({ fetchImpl = fetch } = {}) {
-  const [hackerNews, bluesky] = await Promise.all([
+  const [hackerNews, bluesky, devTo, stackOverflow] = await Promise.all([
     fetchHackerNewsCandidates({ fetchImpl, limit: 40 }),
-    fetchBlueskyCandidates({ fetchImpl, limit: 12 })
+    fetchBlueskyCandidates({ fetchImpl, limit: 12 }),
+    fetchDevToCandidates({ fetchImpl, limit: 10 }),
+    fetchStackOverflowCandidates({ fetchImpl })
   ]);
-  return saveCandidates([...hackerNews, ...bluesky]);
+  return saveCandidates([...hackerNews, ...bluesky, ...devTo, ...stackOverflow]);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -69,4 +69,35 @@ export class ResendProvider {
       clearTimeout(timeout);
     }
   }
+
+  async sendLeadEmail({ to, displayName = '', problem = '', message, sourceUrl = '', idempotencyKey = '' }) {
+    const recipient = clean(to, 320).toLowerCase();
+    const name = escapeHtml(displayName || 'there', 120);
+    const safeProblem = escapeHtml(problem || 'a client payment or scope issue', 500);
+    const safeMessage = clean(message, 4000);
+    const safeSourceUrl = clean(sourceUrl, 1000);
+    if (!this.configured) return { sent: false, status: 'not_configured' };
+    if (!recipient || !EMAIL_PATTERN.test(recipient) || !safeMessage) throw new Error('Resend lead recipient and message are required.');
+    if (this.testMode && recipient !== this.testTo) throw new Error('Resend test mode is restricted to EMAIL_TEST_TO.');
+
+    const subject = 'A practical note about your client workflow';
+    const text = `Hi ${displayName || 'there'},\\n\\nI read your public post about ${problem || 'a client payment or scope issue'} and thought this practical resource may help.\\n\\n${safeMessage}\\n\\nPublic post: ${safeSourceUrl || 'not available'}\\n\\nIf you would rather not receive a follow-up, reply with “stop”.\\n\\nBest,\\nClient Protection Kit`;
+    const html = `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#172033;max-width:640px;margin:auto"><p>Hi ${name},</p><p>I read your public post about <strong>${safeProblem}</strong> and thought this practical resource may help.</p><p style="white-space:pre-wrap">${escapeHtml(safeMessage)}</p>${safeSourceUrl ? `<p><a href="${escapeHtml(safeSourceUrl)}">View the public post</a></p>` : ''}<p>If you would rather not receive a follow-up, reply with <strong>stop</strong>.</p><p>Best,<br>Client Protection Kit</p></div>`;
+    const sender = this.from.includes('<') ? this.from : `Client Protection Kit <${this.from}>`;
+    const payload = { from: sender, to: [recipient], subject, html, text };
+    if (EMAIL_PATTERN.test(this.replyTo)) payload.reply_to = [this.replyTo];
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const headers = { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' };
+      const safeIdempotencyKey = clean(idempotencyKey, 256);
+      if (safeIdempotencyKey) headers['Idempotency-Key'] = safeIdempotencyKey;
+      const response = await this.fetchImpl(RESEND_API_URL, { method: 'POST', headers, body: JSON.stringify(payload), signal: controller.signal });
+      const responsePayload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(responsePayload?.message || responsePayload?.error?.message || `Resend request failed: ${response.status}`);
+      return { sent: true, status: 'sent', providerMessageId: responsePayload?.id || null };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
 }

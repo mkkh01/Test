@@ -75,3 +75,32 @@ test('Resend test mode refuses a different recipient', async () => {
   await assert.rejects(() => provider.sendSampleEmail({ to: 'someone-else@example.com', previewUrl: 'https://example.com/preview.html' }), /restricted to EMAIL_TEST_TO/);
   assert.equal(called, false);
 });
+
+test('Resend provider builds an individual lead email safely', async () => {
+  let request;
+  const provider = new ResendProvider({
+    provider: 'resend',
+    apiKey: 're_test_only',
+    from: 'hello@example.com',
+    replyTo: 'owner@example.com',
+    fetchImpl: async (url, options) => {
+      request = { url, options, body: JSON.parse(options.body) };
+      return new Response(JSON.stringify({ id: 'lead_email_123' }), { status: 200 });
+    }
+  });
+  const result = await provider.sendLeadEmail({
+    to: 'public@example.com',
+    displayName: 'Public Author',
+    problem: 'late invoice',
+    message: 'A short practical suggestion.',
+    sourceUrl: 'https://example.com/post',
+    idempotencyKey: 'lead-123-message-1'
+  });
+  assert.deepEqual(result, { sent: true, status: 'sent', providerMessageId: 'lead_email_123' });
+  assert.deepEqual(request.body.to, ['public@example.com']);
+  assert.equal(request.body.from, 'Client Protection Kit <hello@example.com>');
+  assert.deepEqual(request.body.reply_to, ['owner@example.com']);
+  assert.equal(request.options.headers['Idempotency-Key'], 'lead-123-message-1');
+  assert.match(request.body.text, /late invoice/);
+  assert.match(request.body.text, /reply with “stop”/);
+});

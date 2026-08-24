@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { closeDiscoveryWorker, runDiscovery } from './discovery-worker.js';
 import { closeLeadAnalysisWorker, runLeadAnalysis } from './lead-analysis-worker.js';
 import { closePaymentWorker, runPaymentWorker } from './payment-worker.js';
+import { closeOutreachWorker, runOutreachWorker } from './outreach-worker.js';
 
 async function runStep(name, fn) {
   try {
@@ -19,6 +20,7 @@ export async function runCronOnce() {
     : await runStep('discovery', () => runDiscovery({ fetchImpl: fetch }));
   summary.analysis = await runStep('analysis', () => runLeadAnalysis({ limit: 10 }));
   summary.payment = await runStep('payment', () => runPaymentWorker({ limit: 20 }));
+  summary.outreach = await runStep('outreach', () => runOutreachWorker({ limit: 1 }));
   return summary;
 }
 
@@ -29,7 +31,7 @@ async function main() {
     const failed = Object.values(summary).some((result) => result?.mode === 'error');
     if (failed) process.exitCode = 1;
   } finally {
-    await Promise.allSettled([closePaymentWorker(), closeLeadAnalysisWorker(), closeDiscoveryWorker()]);
+    await Promise.allSettled([closePaymentWorker(), closeLeadAnalysisWorker(), closeDiscoveryWorker(), closeOutreachWorker()]);
   }
 }
 

@@ -14,9 +14,9 @@ For continuous queue processing, create a Render Background Worker with command 
 
 The web service and worker/cron must share `DATABASE_URL`, `DB_POOL_MAX`, `SOLANA_RPC_URL`, `SOLANA_COMMITMENT`, `USDT_NETWORK`, `USDT_RECEIVING_ADDRESS`, `SOLANA_USDT_MINT`, `USDT_TOKEN_CONTRACT`, `USDT_TOKEN_DECIMALS`, `USDT_MIN_CONFIRMATIONS`, `GEMINI_MODEL`, `GEMINI_API_KEY_1..5`, `GEMINI_API_KEY_COUNT`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_WEBHOOK_SECRET`. Secrets must be entered in Render, not committed to GitHub.
 
-## Hourly external Cron trigger
+## External Cron trigger every 30 minutes
 
-If the Render Web Service is the only deployed service, an external cron provider can call the protected endpoint once per hour:
+If the Render Web Service is the only deployed service, an external cron provider can call the protected endpoint every 30 minutes. Use the provider's six-field or five-field syntax as required by that provider; for standard five-field cron use `*/30 * * * *` UTC.
 
 ```text
 POST https://test-p2h3.onrender.com/api/internal/cron/run
@@ -25,7 +25,7 @@ Authorization: Bearer <CRON_TRIGGER_SECRET>
 
 The service returns `202` immediately, starts one child process, and logs the discovery, analysis, and payment summary. If a previous cycle is still running, it returns `409` and the cron provider should record the run as already in progress rather than retrying aggressively. The secret must be created by the owner, entered in Render as `CRON_TRIGGER_SECRET`, and entered in the cron provider's Authorization header; it must never be placed in the URL or committed to GitHub. The endpoint supports GET for providers that cannot issue POST, but POST is preferred.
 
-The hourly cycle discovers public Hacker News and Bluesky candidates first, then analyzes newly queued candidates with Gemini, and finally processes payment jobs. It creates drafts only; there is no outbound message step.
+Each cycle discovers public Hacker News, Bluesky, DEV Community, and Stack Overflow candidates, then analyzes newly queued candidates with Gemini and processes payment jobs. Public leads create drafts only. The outreach worker can process at most one previously approved message per cycle, requires `OUTREACH_SEND_ENABLED=true`, and refuses the shared `onboarding@resend.dev` sender; it never sends unapproved or bulk outreach.
 
 ## Safety
 

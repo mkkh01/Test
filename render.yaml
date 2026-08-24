@@ -37,6 +37,12 @@ services:
         sync: false
       - key: EMAIL_TEST_TO
         sync: false
+      - key: OUTREACH_SEND_ENABLED
+        value: "false"
+      - key: OUTREACH_MIN_GAP_MINUTES
+        value: "30"
+      - key: DISCOVERY_CRON_ENABLED
+        value: "true"
       - key: GEMINI_API_KEY_COUNT
         value: "5"
       - key: GEMINI_MODEL

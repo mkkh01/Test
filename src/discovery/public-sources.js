@@ -28,6 +28,38 @@ export async function fetchHackerNewsCandidates({ fetchImpl = fetch, terms = DEF
   return items.filter(Boolean).filter((item) => matchesTerms(item, terms));
 }
 
+export async function fetchDevToCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 20 } = {}) {
+  const results = [];
+  for (const term of terms.slice(0, 6)) {
+    const tag = term.replace(/[^a-z0-9-]/gi, '').slice(0, 30);
+    if (!tag) continue;
+    const url = `https://dev.to/api/articles?tag=${encodeURIComponent(tag)}&per_page=${Math.min(limit, 100)}`;
+    const response = await fetchImpl(url, { headers: { Accept: 'application/json' } });
+    if (!response.ok) continue;
+    const payload = await response.json();
+    for (const article of payload || []) {
+      results.push({
+        source: 'dev_to',
+        externalId: String(article.id || article.url),
+        sourceUrl: article.url,
+        title: clean(article.title),
+        body: clean(article.description || article.title),
+        authorHandle: clean(article.user?.username, 120),
+        publishedAt: article.published_at || null
+      });
+    }
+  }
+  return results.filter((item) => matchesTerms(item, terms));
+}
+
+export async function fetchStackOverflowCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS } = {}) {
+  const tags = ['freelancing', 'freelance', 'small-business'];
+  const feedUrl = `https://stackoverflow.com/feeds/tag?tagnames=${encodeURIComponent(tags.join(';'))}&sort=newest`;
+  const response = await fetchImpl(feedUrl, { headers: { Accept: 'application/atom+xml, application/xml, text/xml' } });
+  if (!response.ok) throw new Error(`Stack Overflow feed request failed: ${response.status}`);
+  return parseRss(await response.text(), { source: 'stack_overflow', baseUrl: feedUrl }).filter((item) => matchesTerms(item, terms));
+}
+
 export async function fetchBlueskyCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 25 } = {}) {
   const results = [];
   for (const term of terms.slice(0, 6)) {
@@ -53,11 +85,13 @@ export async function fetchBlueskyCandidates({ fetchImpl = fetch, terms = DEFAUL
 
 export function parseRss(xml, { source = 'rss', baseUrl = '' } = {}) {
   const items = [];
-  const blocks = xml.match(/<item[\s\S]*?<\/item>/gi) || [];
+  const blocks = xml.match(/<(?:item|entry)[\s\S]*?<\/(?:item|entry)>/gi) || [];
   for (const block of blocks) {
     const read = (tag) => clean(block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[1] || '');
-    const link = read('link');
-    items.push({ source, externalId: link || read('guid') || read('title'), sourceUrl: link || baseUrl, title: read('title'), body: read('description'), authorHandle: read('dc:creator') || read('author'), publishedAt: read('pubDate') || null });
+    const linkMatch = block.match(/<link[^>]*?(?:href=["']([^"']+)["'])[^>]*>/i);
+    const link = read('link') || clean(linkMatch?.[1] || '');
+    const id = read('guid') || read('id') || link || read('title');
+    items.push({ source, externalId: id, sourceUrl: link || baseUrl, title: read('title'), body: read('description') || read('summary') || read('content'), authorHandle: read('dc:creator') || read('author') || read('name'), publishedAt: read('pubDate') || read('published') || read('updated') || null });
   }
   return items;
 }

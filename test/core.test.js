@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deduplicateCandidates, parseRss, scoreCandidate } from '../src/discovery/public-sources.js';
+import { deduplicateCandidates, parseRss, scoreCandidate, fetchDevToCandidates } from '../src/discovery/public-sources.js';
 import { UsdtVerifier } from '../src/integrations/usdt-verifier.js';
 import { createDownloadToken, hashDownloadToken, tokenMatches, isTokenExpired } from '../src/delivery/download-token.js';
 import { GeminiRouter } from '../src/integrations/gemini-router.js';
@@ -32,6 +32,20 @@ test('RSS parser extracts a useful public item', () => {
   assert.equal(item.source, 'demo_rss');
   assert.equal(item.sourceUrl, 'https://example.test/post');
   assert.match(item.body, /not paid/);
+});
+
+test('Atom parser extracts a Stack Overflow-style entry', () => {
+  const xml = '<feed><entry><id>https://stackoverflow.com/q/123</id><link href="https://stackoverflow.com/q/123"/><title>Client has not paid an invoice</title><summary>How should I handle this unpaid client?</summary><updated>2026-08-23T10:00:00Z</updated></entry></feed>';
+  const [item] = parseRss(xml, { source: 'stack_overflow' });
+  assert.equal(item.sourceUrl, 'https://stackoverflow.com/q/123');
+  assert.match(item.body, /unpaid client/);
+});
+
+test('DEV candidate fetch normalizes public article data', async () => {
+  const items = await fetchDevToCandidates({ terms: ['late invoice'], limit: 2, fetchImpl: async () => ({ ok: true, status: 200, json: async () => [{ id: 7, url: 'https://dev.to/example/late-invoice', title: 'Late invoice help', description: 'My client has not paid.', user: { username: 'public-author' }, published_at: '2026-08-23T10:00:00Z' }] }) });
+  assert.equal(items[0].source, 'dev_to');
+  assert.equal(items[0].sourceUrl, 'https://dev.to/example/late-invoice');
+  assert.equal(items[0].authorHandle, 'public-author');
 });
 
 test('USDT verifier rejects wrong network before provider access', async () => {

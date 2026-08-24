@@ -315,6 +315,137 @@ app.get('/api/admin/summary', requireAdmin, async (_req, res) => {
   }
 });
 
+app.get('/api/admin/leads', requireAdmin, async (req, res) => {
+  if (!pgPool) return res.status(503).json({ ok: false, error: 'Lead review requires PostgreSQL.' });
+  const page = Math.max(1, Number.parseInt(req.query.page || '1', 10) || 1);
+  const limit = Math.min(50, Math.max(1, Number.parseInt(req.query.limit || '25', 10) || 25));
+  const offset = (page - 1) * limit;
+  const status = cleanText(req.query.status, 40);
+  const salesStatus = cleanText(req.query.salesStatus, 40);
+  try {
+    const result = await pgPool.query(`
+      select l.id, l.source, l.source_url, l.display_name, l.public_handle,
+             l.contact_email, l.contact_email_source, l.contact_permission,
+             l.buyer_type, l.problem_type, l.fit_score, l.status, l.sales_status,
+             l.evidence_excerpt, l.discovered_at, l.last_contacted_at, l.opted_out_at,
+             la.recommended_product, la.message_draft as analysis_message_draft,
+             om.id as message_id, om.channel as message_channel, om.body as message_body,
+             om.recipient_email as message_recipient_email, om.subject as message_subject,
+             om.status as message_status, om.approval_required, om.approved_by,
+             om.approved_at, om.scheduled_at, om.sent_at, om.external_message_id,
+             om.error_message, om.attempt_count,
+             order_info.order_number, order_info.order_status
+      from public.leads l
+      left join lateral (
+        select recommended_product, message_draft
+        from public.lead_analyses where lead_id = l.id order by created_at desc limit 1
+      ) la on true
+      left join lateral (
+        select id, channel, body, recipient_email, subject, status, approval_required,
+               approved_by, approved_at, scheduled_at, sent_at, external_message_id,
+               error_message, attempt_count
+        from public.outreach_messages where lead_id = l.id order by created_at desc limit 1
+      ) om on true
+      left join lateral (
+        select o.order_number, o.status as order_status
+        from public.orders o
+        where l.contact_email is not null and lower(o.customer_email) = lower(l.contact_email)
+        order by o.created_at desc limit 1
+      ) order_info on true
+      where ($1 = '' or l.status = $1) and ($2 = '' or l.sales_status = $2)
+      order by l.fit_score desc nulls last, l.discovered_at desc
+      limit $3 offset $4`, [status, salesStatus, limit, offset]);
+    return res.json({ ok: true, page, limit, leads: result.rows });
+  } catch (error) {
+    console.error('admin leads failed', error);
+    return res.status(500).json({ ok: false, error: 'Could not load leads.' });
+  }
+});
+
+app.post('/api/admin/leads/:id/approve', requireAdmin, async (req, res) => {
+  if (!pgPool) return res.status(503).json({ ok: false, error: 'Lead approval requires PostgreSQL.' });
+  const leadId = cleanText(req.params.id, 80);
+  const recipientEmail = cleanText(req.body.recipientEmail, 320).toLowerCase();
+  const approvalNote = cleanText(req.body.approvalNote, 500);
+  if (!isEmail(recipientEmail)) return res.status(400).json({ ok: false, error: 'A valid public contact email is required.' });
+  const client = await pgPool.connect();
+  try {
+    await client.query('begin');
+    const leadResult = await client.query(`select id, status, contact_permission, opted_out_at, blocked_at from public.leads where id = $1 for update`, [leadId]);
+    const lead = leadResult.rows[0];
+    if (!lead) { await client.query('rollback'); return res.status(404).json({ ok: false, error: 'Lead not found.' }); }
+    if (lead.opted_out_at || lead.blocked_at || lead.contact_permission === 'opted_out' || lead.contact_permission === 'blocked') { await client.query('rollback'); return res.status(409).json({ ok: false, error: 'This lead is blocked or opted out.' }); }
+    const messageResult = await client.query(`select id, body, status from public.outreach_messages where lead_id = $1 order by created_at desc limit 1 for update`, [leadId]);
+    let message = messageResult.rows[0];
+    if (!message) {
+      const analysis = await client.query('select message_draft from public.lead_analyses where lead_id = $1 order by created_at desc limit 1', [leadId]);
+      const body = cleanText(analysis.rows[0]?.message_draft, 4000);
+      if (!body) { await client.query('rollback'); return res.status(400).json({ ok: false, error: 'This lead has no message draft.' }); }
+      const created = await client.query(`insert into public.outreach_messages (lead_id, channel, direction, body, subject, status, approval_required, recipient_email, provider) values ($1, 'email', 'outbound', $2, $3, 'draft', true, $4, 'resend') returning id, body, status`, [leadId, body, 'A practical note about your client workflow', recipientEmail]);
+      message = created.rows[0];
+    }
+    if (message.status === 'sent') { await client.query('rollback'); return res.status(409).json({ ok: false, error: 'This message has already been sent.' }); }
+    const idempotencyKey = `lead:${leadId}:message:${message.id}`;
+    await client.query(`update public.leads set contact_email = $1, contact_email_source = 'admin_verified_public', contact_permission = 'public_contact', sales_status = 'qualified', status = 'approved', updated_at = now() where id = $2`, [recipientEmail, leadId]);
+    await client.query(`update public.outreach_messages set recipient_email = $1, subject = coalesce(subject, $2), status = 'queued', approval_required = false, approved_by = 'admin', approval_note = $3, approved_at = now(), scheduled_at = now(), provider = 'resend', idempotency_key = $4, updated_at = now() where id = $5`, [recipientEmail, 'A practical note about your client workflow', approvalNote || null, idempotencyKey, message.id]);
+    await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['admin', 'lead_message_approved', 'lead', leadId, JSON.stringify({ messageId: message.id, recipientEmail, idempotencyKey })]);
+    await client.query('commit');
+    return res.status(202).json({ ok: true, status: 'queued', leadId, messageId: message.id });
+  } catch (error) {
+    await client.query('rollback');
+    console.error('admin lead approval failed', error);
+    return res.status(500).json({ ok: false, error: 'Could not approve lead message.' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/admin/leads/:id/reject', requireAdmin, async (req, res) => {
+  if (!pgPool) return res.status(503).json({ ok: false, error: 'Lead review requires PostgreSQL.' });
+  const leadId = cleanText(req.params.id, 80);
+  const reason = cleanText(req.body.reason, 500);
+  try {
+    await pgPool.query(`update public.outreach_messages set status = 'rejected', error_message = $1, updated_at = now() where lead_id = $2 and status in ('draft', 'approved', 'queued')`, [reason || 'Rejected by admin.', leadId]);
+    await pgPool.query(`update public.leads set status = 'ignored', sales_status = 'not_interested', updated_at = now() where id = $1`, [leadId]);
+    await pgPool.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['admin', 'lead_message_rejected', 'lead', leadId, JSON.stringify({ reason: reason || null })]);
+    return res.json({ ok: true, status: 'rejected', leadId });
+  } catch (error) {
+    console.error('admin lead rejection failed', error);
+    return res.status(500).json({ ok: false, error: 'Could not reject lead message.' });
+  }
+});
+
+app.post('/api/admin/leads/:id/opt-out', requireAdmin, async (req, res) => {
+  if (!pgPool) return res.status(503).json({ ok: false, error: 'Lead review requires PostgreSQL.' });
+  const leadId = cleanText(req.params.id, 80);
+  try {
+    await pgPool.query(`update public.outreach_messages set status = case when status in ('draft', 'approved', 'queued') then 'rejected' else status end, error_message = case when status in ('draft', 'approved', 'queued') then 'Lead opted out.' else error_message end, updated_at = now() where lead_id = $1`, [leadId]);
+    await pgPool.query(`update public.leads set contact_permission = 'opted_out', opted_out_at = now(), sales_status = 'not_interested', status = 'blocked', updated_at = now() where id = $1`, [leadId]);
+    await pgPool.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['admin', 'lead_opted_out', 'lead', leadId, '{}']);
+    return res.json({ ok: true, status: 'opted_out', leadId });
+  } catch (error) {
+    console.error('admin lead opt-out failed', error);
+    return res.status(500).json({ ok: false, error: 'Could not opt out lead.' });
+  }
+});
+
+app.post('/api/admin/leads/:id/sales-status', requireAdmin, async (req, res) => {
+  if (!pgPool) return res.status(503).json({ ok: false, error: 'Lead review requires PostgreSQL.' });
+  const leadId = cleanText(req.params.id, 80);
+  const salesStatus = cleanText(req.body.salesStatus, 40);
+  const allowed = new Set(['not_contacted', 'contacted', 'replied', 'qualified', 'converted', 'not_interested', 'lost', 'blocked']);
+  if (!allowed.has(salesStatus)) return res.status(400).json({ ok: false, error: 'Invalid sales status.' });
+  try {
+    const result = await pgPool.query(`update public.leads set sales_status = $1, status = case when $1 = 'converted' then 'converted' when $1 = 'replied' then 'replied' when $1 = 'blocked' then 'blocked' else status end, updated_at = now() where id = $2 returning id`, [salesStatus, leadId]);
+    if (!result.rows[0]) return res.status(404).json({ ok: false, error: 'Lead not found.' });
+    await pgPool.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['admin', 'lead_sales_status_changed', 'lead', leadId, JSON.stringify({ salesStatus })]);
+    return res.json({ ok: true, leadId, salesStatus });
+  } catch (error) {
+    console.error('admin lead sales status failed', error);
+    return res.status(500).json({ ok: false, error: 'Could not update sales status.' });
+  }
+});
+
 app.get('/api/admin/orders', requireAdmin, async (req, res) => {
   if (!pgPool) return res.status(503).json({ ok: false, error: 'Admin order review requires PostgreSQL.' });
   const page = Math.max(1, Number.parseInt(req.query.page || '1', 10) || 1);

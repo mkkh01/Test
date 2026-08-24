@@ -11,3 +11,13 @@ Sources:
 Render environment edit was opened without revealing secret values. A new empty environment-variable row is present at the end of the list; it will be filled only with `EMAIL_REPLY_TO=memo2026186@gmail.com` before saving.
 
 Final verification: `EMAIL_REPLY_TO=memo2026186@gmail.com` was added in Render without exposing API secrets. The live health endpoint reports `emailConfigured=true`; code syntax checks pass and all 23 tests pass. No additional live email was sent during this deliverability configuration change.
+
+Render now contains `EMAIL_REPLY_TO` set to the owner's confirmed email address. The value is non-secret and was added without opening or changing any secret. Live health remained `emailConfigured=true` after the environment save/deploy.
+
+Public discovery sources reviewed for the lead pipeline:
+
+- DEV Community API: https://developers.forem.com/api/v0
+- Stack Overflow public tag feeds: https://stackoverflow.com/feeds/tag?tagnames=freelancing;freelance;small-business&sort=newest
+- Hacker News public API: https://github.com/HackerNews/API
+
+The implementation uses public GET/API or RSS endpoints only. It does not scrape private pages, bypass login, or send messages automatically to authors.
