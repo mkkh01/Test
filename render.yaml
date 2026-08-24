@@ -27,6 +27,14 @@ services:
         sync: false
       - key: PUBLIC_BASE_URL
         value: https://test-p2h3.onrender.com
+      - key: EMAIL_PROVIDER
+        value: resend
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: onboarding@resend.dev
+      - key: EMAIL_TEST_TO
+        sync: false
       - key: GEMINI_API_KEY_COUNT
         value: "5"
       - key: GEMINI_MODEL

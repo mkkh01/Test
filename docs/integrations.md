@@ -71,3 +71,16 @@ The wallet address is public operational configuration; the private key and seed
 - Solana `getTransaction`: https://solana.com/docs/rpc/http/gettransaction
 - Solana token transfers: https://solana.com/docs/tokens/basics/transfer-tokens
 - Tether USDt on Solana: https://tether.io/news/tether-tokens-usdt-live-on-solana/
+
+## Resend sample email
+
+The server can send a single sample-preview email through the Resend REST API after `EMAIL_PROVIDER=resend` is set. With the default `EMAIL_FROM=onboarding@resend.dev`, the application requires `EMAIL_TEST_TO` and accepts only that exact recipient. This keeps the no-domain setup limited to the owner's Resend account email and prevents the public intake form from becoming a cold-email sender.
+
+| Variable | Purpose | Secret? |
+|---|---|---|
+| `EMAIL_PROVIDER` | Must be `resend` to enable the provider | No |
+| `RESEND_API_KEY` | Server-side Resend sending key | Yes |
+| `EMAIL_FROM` | Sender address; use `onboarding@resend.dev` for the initial test | No |
+| `EMAIL_TEST_TO` | The one allowed recipient while using `onboarding@resend.dev` | Yes/private configuration |
+
+A submitted sample request is stored first. The server sends the preview only when the request uses email as the preferred reply channel and the recipient is the configured test recipient. A custom verified domain is required before sending to ordinary customer addresses. The system does not send outreach to discovered leads; Gemini output remains a draft for human review.

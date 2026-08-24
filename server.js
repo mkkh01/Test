@@ -11,6 +11,7 @@ import { createDownloadToken, hashDownloadToken, isTokenExpired } from './src/de
 import { productBundles } from './src/delivery/product-manifest.js';
 import { GeminiRouter } from './src/integrations/gemini-router.js';
 import { TelegramBot } from './src/integrations/telegram-bot.js';
+import { ResendProvider } from './src/integrations/resend-provider.js';
 import { SolanaRpcProvider } from './src/integrations/solana-rpc-provider.js';
 import { UsdtVerifier } from './src/integrations/usdt-verifier.js';
 import { requireAdmin } from './src/auth/admin-auth.js';
@@ -37,6 +38,7 @@ const pgPool = databaseUrl
   : null;
 const geminiRouter = new GeminiRouter();
 const telegramBot = new TelegramBot();
+const resendProvider = new ResendProvider();
 const solanaRpcProvider = new SolanaRpcProvider();
 const usdtVerifier = new UsdtVerifier({ provider: solanaRpcProvider.configured ? solanaRpcProvider : null });
 const products = [
@@ -251,6 +253,7 @@ app.get('/api/health', (_req, res) => {
     postgresConfigured: Boolean(pgPool),
     dataStore: pgPool ? 'postgres' : supabase ? 'supabase-rest' : 'demo',
     telegramConfigured: telegramBot.configured,
+    emailConfigured: resendProvider.configured,
     geminiKeyCount: geminiRouter.keys.length,
     solanaRpcConfigured: solanaRpcProvider.configured,
     usdtConfigured: usdtVerifier.configured,
@@ -748,7 +751,24 @@ app.post('/api/intake', rateLimit('intake-submit', 6, 60 * 60 * 1000), async (re
   try {
     if (pgPool) await pgPool.query('insert into public.intake_submissions (full_name, email, company, business_type, current_situation, desired_outcome, budget, contact_method, source, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [submission.full_name, submission.email, submission.company, submission.business_type, submission.current_situation, submission.desired_outcome, submission.budget, submission.contact_method, submission.source, submission.status]);
     else { const { error } = await supabase.from('intake_submissions').insert(submission); if (error) throw error; }
-    return res.status(201).json({ ok: true, stored: true, message: 'Submission received.' });
+    let emailStatus = 'not_configured';
+    const wantsEmail = contactMethod.toLowerCase() === 'email';
+    const allowedInCurrentMode = !resendProvider.testMode || email === resendProvider.testTo;
+    if (wantsEmail && resendProvider.configured && allowedInCurrentMode) {
+      try {
+        const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://test-p2h3.onrender.com').replace(/\/$/, '');
+        await resendProvider.sendSampleEmail({ to: submission.email, fullName: submission.full_name, issue: submission.business_type, previewUrl: `${baseUrl}/preview.html` });
+        emailStatus = 'sent';
+      } catch (error) {
+        emailStatus = 'failed';
+        console.error('sample email failed', String(error.message).slice(0, 500));
+      }
+    } else if (!wantsEmail) {
+      emailStatus = 'skipped_contact_method';
+    } else if (resendProvider.configured && resendProvider.testMode) {
+      emailStatus = 'skipped_test_recipient';
+    }
+    return res.status(201).json({ ok: true, stored: true, emailStatus, message: emailStatus === 'sent' ? 'Submission received and preview email sent.' : 'Submission received. Preview email is pending.' });
   } catch (error) {
     console.error('intake insert failed', error);
     return res.status(500).json({ ok: false, error: 'The submission could not be stored.' });
