@@ -15,3 +15,5 @@ Fix deployed in commit `de36273`:
 The user's screenshot shows the browser resolving a malformed host/path containing `%20public_base_url`, with `DNS_PROBE_FINISHED_NXDOMAIN`. This indicates the email URL was built from an incorrectly populated `PUBLIC_BASE_URL` value or an earlier malformed template. The next action is to inspect the non-secret Render value and normalize the base URL in code so only `https://test-p2h3.onrender.com` can be used.
 
 Final live verification after commit `a508560`: `/preview` and `/preview.html` both returned HTTP 200 and the preview content was present. `/api/health` reported `emailConfigured=true`. The malformed `%20public_base_url` value was never sent again after this fix, and no additional email was sent during troubleshooting.
+
+The visual sample viewer was deployed in commit `f957153`. Live verification of `https://test-p2h3.onrender.com/preview` returned HTTP 200 and confirmed the page contains Starter, Complete, and Agency preview panels. The page uses browser-rendered document mockups and exposes no downloadable paid files.
