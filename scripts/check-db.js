@@ -1,9 +1,10 @@
 import 'dotenv/config';
 import pg from 'pg';
 
-const databaseUrl = process.env.DATABASE_URL?.trim();
+const configuredSupabaseValue = process.env.SUPABASE_URL?.trim() || '';
+const databaseUrl = process.env.DATABASE_URL?.trim() || (configuredSupabaseValue.startsWith('postgresql://') || configuredSupabaseValue.startsWith('postgres://') ? configuredSupabaseValue : '');
 if (!databaseUrl) {
-  console.error('DATABASE_URL is not configured.');
+  console.error('DATABASE_URL (or a PostgreSQL SUPABASE_URL value) is not configured.');
   process.exit(2);
 }
 

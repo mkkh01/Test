@@ -4,12 +4,13 @@ import { createClient } from '@supabase/supabase-js';
 import pg from 'pg';
 import { fetchHackerNewsCandidates, fetchBlueskyCandidates, deduplicateCandidates } from '../discovery/public-sources.js';
 
-const supabaseUrl = process.env.SUPABASE_URL;
+const configuredSupabaseValue = process.env.SUPABASE_URL?.trim() || '';
+const supabaseUrl = configuredSupabaseValue.startsWith('http://') || configuredSupabaseValue.startsWith('https://') ? configuredSupabaseValue : '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = supabaseUrl && supabaseServiceKey
   ? createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } })
   : null;
-const databaseUrl = process.env.DATABASE_URL?.trim();
+const databaseUrl = process.env.DATABASE_URL?.trim() || (configuredSupabaseValue.startsWith('postgresql://') || configuredSupabaseValue.startsWith('postgres://') ? configuredSupabaseValue : '');
 const pgPool = databaseUrl
   ? new pg.Pool({ connectionString: databaseUrl, max: Number(process.env.DB_POOL_MAX || 5), idleTimeoutMillis: 30_000, connectionTimeoutMillis: 8_000, ssl: databaseUrl.includes('supabase.com') ? { rejectUnauthorized: false } : undefined })
   : null;

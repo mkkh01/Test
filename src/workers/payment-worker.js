@@ -4,7 +4,8 @@ import { createDownloadToken, hashDownloadToken } from '../delivery/download-tok
 import { TronGridProvider } from '../integrations/trongrid-provider.js';
 import { UsdtVerifier } from '../integrations/usdt-verifier.js';
 
-const databaseUrl = process.env.DATABASE_URL?.trim();
+const configuredSupabaseValue = process.env.SUPABASE_URL?.trim() || '';
+const databaseUrl = process.env.DATABASE_URL?.trim() || (configuredSupabaseValue.startsWith('postgresql://') || configuredSupabaseValue.startsWith('postgres://') ? configuredSupabaseValue : '');
 const pool = databaseUrl
   ? new pg.Pool({ connectionString: databaseUrl, max: Number(process.env.DB_POOL_MAX || 5), idleTimeoutMillis: 30_000, connectionTimeoutMillis: 8_000, ssl: databaseUrl.includes('supabase.com') ? { rejectUnauthorized: false } : undefined })
   : null;
