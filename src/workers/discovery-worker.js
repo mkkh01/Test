@@ -66,6 +66,10 @@ async function saveCandidates(items) {
   return { discovered: normalized.length, stored: storedRows?.length || 0, mode: 'supabase-rest' };
 }
 
+export async function closeDiscoveryWorker() {
+  return pgPool?.end();
+}
+
 export async function runDiscovery({ fetchImpl = fetch } = {}) {
   const [hackerNews, bluesky] = await Promise.all([
     fetchHackerNewsCandidates({ fetchImpl, limit: 40 }),
@@ -76,6 +80,6 @@ export async function runDiscovery({ fetchImpl = fetch } = {}) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   runDiscovery()
-    .then((summary) => console.log(JSON.stringify(summary)))
+    .then((summary) => { console.log(JSON.stringify(summary)); return closeDiscoveryWorker(); })
     .catch((error) => { console.error(error); process.exitCode = 1; });
 }

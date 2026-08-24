@@ -65,6 +65,10 @@ async function analyzeJob(job) {
   return { jobId: job.id, leadId, fitScore };
 }
 
+export async function closeLeadAnalysisWorker() {
+  return pool?.end();
+}
+
 export async function runLeadAnalysis({ limit = 10 } = {}) {
   if (!pool) return { mode: 'disabled', reason: 'DATABASE_URL is not configured.', processed: 0 };
   if (!gemini.keys.length) return { mode: 'waiting_for_gemini', reason: 'No Gemini API key is configured.', processed: 0 };
@@ -82,6 +86,6 @@ export async function runLeadAnalysis({ limit = 10 } = {}) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   runLeadAnalysis()
-    .then((summary) => { console.log(JSON.stringify(summary)); return pool?.end(); })
+    .then((summary) => { console.log(JSON.stringify(summary)); return closeLeadAnalysisWorker(); })
     .catch(async (error) => { console.error(error); await pool?.end(); process.exitCode = 1; });
 }

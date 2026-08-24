@@ -68,7 +68,7 @@ function extractContractCall(transaction) {
   const contract = transaction?.raw_data?.contract?.[0];
   const parameter = contract?.parameter?.value;
   const data = clean(parameter?.data).toLowerCase();
-  if (contract?.type !== 'TriggerSmartContract' || !data.startsWith(TRANSFER_SELECTOR) || data.length < 136) return null;
+  if (contract?.type !== 'TriggerSmartContract' || !data.startsWith(TRANSFER_SELECTOR) || data.length < 160) return null;
   const recipientHex = data.slice(32, 96);
   const amountHex = data.slice(96, 160);
   let amountRaw;
@@ -178,7 +178,7 @@ export class TronGridProvider {
       throw error;
     }
     const blockNumber = blockNumberFrom(info);
-    const receiptExists = Boolean(info && (info.blockNumber || info.contractResult || info.contractRet || info.receipt || info.ret));
+    const receiptExists = Boolean(info && (info.blockNumber || info.block_num || info.receipt?.result || info.contractRet || (Array.isArray(info.contractResult) && info.contractResult.length > 0) || (Array.isArray(info.ret) && info.ret.length > 0)));
     const pending = !receiptExists;
     const decoded = extractContractCall(body);
     let transfer = null;

@@ -131,6 +131,10 @@ async function processJob(job) {
   }
 }
 
+export async function closePaymentWorker() {
+  return pool?.end();
+}
+
 export async function runPaymentWorker({ limit = 10 } = {}) {
   if (!pool) return { mode: 'disabled', reason: 'DATABASE_URL is not configured.', processed: 0 };
   const jobs = await claimJobs(limit);
@@ -147,6 +151,6 @@ export async function runPaymentWorker({ limit = 10 } = {}) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   runPaymentWorker()
-    .then((summary) => { console.log(JSON.stringify(summary)); return pool?.end(); })
+    .then((summary) => { console.log(JSON.stringify(summary)); return closePaymentWorker(); })
     .catch(async (error) => { console.error(error); await pool?.end(); process.exitCode = 1; });
 }

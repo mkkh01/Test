@@ -9,8 +9,9 @@ A small, English-first digital product storefront for the **Client Payment & Sco
 - Responsive landing page, pricing cards, free-sample intake form, checkout form, admin summary page, and health endpoint.
 - Supabase PostgreSQL schema for products, orders, invoices, payments, leads, source items, analyses, outreach messages, jobs, and audit logs.
 - Private-by-default database permissions with Row Level Security and server-side service-role access only.
-- Gemini, Telegram, and USDT integration modules are present as secret-free adapters; no real credentials are committed to the repository.
-- Public-source discovery adapters for Hacker News, Bluesky, and RSS are present, with a Supabase-backed discovery worker ready for later Render worker scheduling.
+- TronGrid USDT verification provider, protected customer status token, TxID submission, atomic payment state transitions, secure download release, and admin payment review endpoints.
+- Gemini, Telegram, and USDT integration modules remain server-side; no real credentials are committed to the repository.
+- Public-source discovery adapters for Hacker News, Bluesky, and RSS are present, with queue-backed lead analysis and Render worker/Cron entrypoints.
 
 ## Local development
 
@@ -38,6 +39,13 @@ Required later integrations:
 - `GEMINI_API_KEY_1` through `GEMINI_API_KEY_5`
 - `USDT_NETWORK`
 - `USDT_RECEIVING_ADDRESS`
+- `USDT_TOKEN_CONTRACT`
+- `USDT_TOKEN_DECIMALS`
+- `USDT_MIN_CONFIRMATIONS`
+- `TRONGRID_BASE_URL`
+- `TRONGRID_API_KEY`
+- `TELEGRAM_WEBHOOK_SECRET`
+- `PUBLIC_BASE_URL`
 
 The five Gemini keys are for reliability and controlled rotation, not for bypassing provider quotas or terms. The application will record key health, apply per-key limits, and stop or fall back to deterministic rules when no key is available.
 
@@ -45,15 +53,20 @@ The five Gemini keys are for reliability and controlled rotation, not for bypass
 
 Open `/admin.html` only from a trusted device after setting `ADMIN_ACCESS_TOKEN` in the server environment. The page shows aggregate counts and sends the token in an HTTP header; it does not persist the token in browser storage. The admin route does not expose customer rows or secrets.
 
+## Payment flow
+
+The customer creates an order and receives a customer-scoped status token. The storefront shows the exact USDT amount, TRC20 network, receiving address, and expiry. The customer submits a TxID through the status-token endpoint. The server reads the transaction through TronGrid, checks the transaction receipt, TRC20 contract, destination address, amount, confirmation count, expiry, and TxID uniqueness. Only a confirmed result changes the order and invoice to `paid`, creates a short-lived download token, and releases the matching ZIP bundle. A confirming result is queued for later recheck; provider rate limits or ambiguous results go to manual review.
+
 ## Integration modules
 
 - `src/integrations/gemini-router.js` rotates up to five configured Gemini API keys with local failure backoff and no key values in code.
 - `src/integrations/telegram-bot.js` provides webhook and message helpers while remaining disabled without `TELEGRAM_BOT_TOKEN`.
-- `src/integrations/usdt-verifier.js` validates invoice data and transaction results through a provider adapter; it never handles a private key.
+- `src/integrations/usdt-verifier.js` validates invoice data and transaction results through the TronGrid provider; it never handles a private key.
+- `src/integrations/trongrid-provider.js` reads TRON transaction bodies, receipts, TRC20 transfer history, and current block height using a server-side API key.
 - `src/discovery/public-sources.js` includes public Hacker News, Bluesky, and RSS candidate collectors with keyword filtering, deduplication, and a deterministic fit score.
 - `src/workers/discovery-worker.js` collects candidates and queues lead-analysis jobs in Supabase; it runs in dry-run mode when Supabase server credentials are absent.
 
-These modules are intentionally not connected to real accounts yet. They can be tested with injected adapters before production credentials are added.
+Real production credentials remain in Render only. The provider and webhook code are tested with injected adapters locally; live payment acceptance should be tested first with a small controlled transaction.
 
 ## Database
 
@@ -71,9 +84,9 @@ It has been applied to the confirmed Supabase project. The server is configured 
 Storefront → free sample / intake → order → USDT invoice → blockchain verification → secure download
 ```
 
-The payment module will verify a successful transaction, correct network, correct token contract, destination address, amount, confirmations, and TxID uniqueness. It will never receive or store a wallet private key.
+The payment module verifies a successful transaction, correct network, correct token contract, destination address, amount, confirmations, invoice expiry, and TxID uniqueness. It never receives or stores a wallet private key. The Render web service handles customer requests; `npm run worker:cron` is the one-shot queue processor for a Render Cron Job, and `npm run worker:run` is the continuous worker command for a paid Render Background Worker.
 
-## Lead discovery flow (later)
+## Lead discovery flow
 
 ```text
 Approved public sources → deduplicate → keyword/rule filter → Gemini analysis → lead score → message draft → policy checks → approved channel
@@ -100,4 +113,4 @@ npm test
 
 The test suite covers candidate scoring, deduplication, RSS parsing, unsupported payment networks, and the rule that a TxID alone never counts as a confirmed payment.
 
-The repository now contains the foundation and tested secret-free adapters. Real Telegram credentials, Gemini keys, wallet settings, source schedules, file storage, authentication, and production download links remain controlled integration steps.
+The repository contains the production payment workflow and tested provider adapter. Real credentials remain controlled Render settings. Telegram outbound messages are limited to opted-in bot users, and public-source outreach remains draft-only until a human approves it.

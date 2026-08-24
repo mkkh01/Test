@@ -312,7 +312,7 @@ app.post('/api/admin/orders/:id/approve', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/telegram/webhook', async (req, res) => {
+app.post('/api/telegram/webhook', rateLimit('telegram-webhook', 120, 60 * 1000), async (req, res) => {
   const expectedSecret = cleanText(process.env.TELEGRAM_WEBHOOK_SECRET, 256);
   const receivedSecret = cleanText(req.headers['x-telegram-bot-api-secret-token'], 256);
   if (expectedSecret && receivedSecret !== expectedSecret) return res.status(401).json({ ok: false, error: 'Invalid webhook secret.' });
@@ -349,7 +349,7 @@ app.post('/api/admin/telegram/webhook', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', rateLimit('order-create', 10, 60 * 60 * 1000), async (req, res) => {
   const productSlug = cleanText(req.body.productSlug, 120);
   const customerEmail = cleanText(req.body.email, 180).toLowerCase();
   const customerName = cleanText(req.body.name, 120);
@@ -401,21 +401,50 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-app.get('/api/orders/:orderNumber/status', async (req, res) => {
+const requestBuckets = new Map();
+function rateLimit(scope, maxRequests, windowMs) {
+  return (req, res, next) => {
+    const key = `${scope}:${req.ip || 'unknown'}`;
+    const now = Date.now();
+    const current = requestBuckets.get(key) || { count: 0, resetAt: now + windowMs };
+    if (now >= current.resetAt) { current.count = 0; current.resetAt = now + windowMs; }
+    current.count += 1;
+    requestBuckets.set(key, current);
+    if (requestBuckets.size > 2000) {
+      for (const [bucketKey, bucket] of requestBuckets) if (bucket.resetAt <= now) requestBuckets.delete(bucketKey);
+    }
+    if (current.count > maxRequests) {
+      res.set('Retry-After', String(Math.ceil((current.resetAt - now) / 1000)));
+      return res.status(429).json({ ok: false, error: 'Too many requests. Please try again later.' });
+    }
+    return next();
+  };
+}
+
+app.get('/api/orders/:orderNumber/status', rateLimit('order-status', 30, 15 * 60 * 1000), async (req, res) => {
   const orderNumber = cleanText(req.params.orderNumber, 80);
   const statusToken = cleanText(req.query.token, 128);
   if (!orderNumber || !statusToken || !hasDatabase()) return res.status(404).json({ ok: false, error: 'Order status not found.' });
   try {
     const row = await getOrderByAccessToken(orderNumber, statusToken);
     if (!row) return res.status(404).json({ ok: false, error: 'Order status not found.' });
-    return res.json({ ok: true, order: publicOrder(normalizeOrder(row)) });
+    const order = normalizeOrder(row);
+    if (order.status === 'paid' && pgPool) {
+      const downloadToken = createDownloadToken();
+      const downloadTokenHash = hashDownloadToken(downloadToken);
+      const downloadExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+      await pgPool.query('update public.orders set download_token_hash = $1, download_expires_at = $2, updated_at = now() where id = $3 and status = \'paid\'', [downloadTokenHash, downloadExpiresAt, order.id]);
+      order.downloadExpiresAt = downloadExpiresAt;
+      return res.json({ ok: true, order: publicOrder(order, { downloadToken }) });
+    }
+    return res.json({ ok: true, order: publicOrder(order) });
   } catch (error) {
     console.error('order status failed', error);
     return res.status(500).json({ ok: false, error: 'Could not load order status.' });
   }
 });
 
-app.post('/api/orders/:orderNumber/payment', async (req, res) => {
+app.post('/api/orders/:orderNumber/payment', rateLimit('payment-submit', 12, 15 * 60 * 1000), async (req, res) => {
   const orderNumber = cleanText(req.params.orderNumber, 80);
   const statusToken = cleanText(req.body.statusToken, 128);
   const txid = cleanText(req.body.txid, 128);
@@ -444,10 +473,16 @@ app.post('/api/orders/:orderNumber/payment', async (req, res) => {
           await client.query('commit');
           return res.json({ ok: true, status: 'confirmed', message: 'This order is already paid.' });
         }
-        const paymentInsert = await client.query(`insert into public.payments (invoice_id, txid, network, token_contract, from_address, to_address, amount_usdt, confirmations, status, provider, raw_reference, verified_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (txid) do nothing returning id`, [current.invoice_id, txid, transaction.network || order.network, transaction.tokenContract || '', transaction.fromAddress || null, transaction.toAddress || '', Number(transaction.amountUsdt || 0), Number(transaction.confirmations || 0), paymentStatus, 'trongrid', JSON.stringify(transaction.raw || transaction), resultStatus === 'confirmed' ? new Date().toISOString() : null]);
-        if (!paymentInsert.rows[0]) {
+        const existingPayment = await client.query('select id, invoice_id from public.payments where txid = $1 limit 1', [txid]);
+        if (existingPayment.rows[0] && existingPayment.rows[0].invoice_id !== current.invoice_id) {
           await client.query('rollback');
           return res.status(409).json({ ok: false, status: 'rejected', reason: 'txid_already_used', error: 'This transaction ID has already been submitted.' });
+        }
+        const paymentValues = [transaction.network || order.network, transaction.tokenContract || '', transaction.fromAddress || null, transaction.toAddress || '', Number(transaction.amountUsdt || 0), Number(transaction.confirmations || 0), paymentStatus, 'trongrid', JSON.stringify(transaction.raw || transaction), resultStatus === 'confirmed' ? new Date().toISOString() : null];
+        if (existingPayment.rows[0]) {
+          await client.query('update public.payments set network = $1, token_contract = $2, from_address = $3, to_address = $4, amount_usdt = $5, confirmations = $6, status = $7, provider = $8, raw_reference = $9, verified_at = $10, updated_at = now() where id = $11', [...paymentValues, existingPayment.rows[0].id]);
+        } else {
+          await client.query('insert into public.payments (invoice_id, txid, network, token_contract, from_address, to_address, amount_usdt, confirmations, status, provider, raw_reference, verified_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [current.invoice_id, txid, ...paymentValues]);
         }
         if (resultStatus === 'confirmed') {
           const downloadToken = createDownloadToken();
@@ -513,7 +548,7 @@ app.get('/api/download/:token', async (req, res) => {
   }
 });
 
-app.post('/api/intake', async (req, res) => {
+app.post('/api/intake', rateLimit('intake-submit', 6, 60 * 60 * 1000), async (req, res) => {
   const fullName = cleanText(req.body.fullName, 120);
   const email = cleanText(req.body.email, 180).toLowerCase();
   const company = cleanText(req.body.company, 160);

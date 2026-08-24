@@ -45,6 +45,18 @@ test('USDT verifier requires a provider and never treats a TxID alone as paid', 
   assert.equal(result.status, 'manual_review');
 });
 
+test('USDT verifier keeps a pending transaction in confirming state', async () => {
+  const verifier = new UsdtVerifier({
+    network: 'TRC20',
+    receivingAddress: 'T123',
+    tokenContract: 'TCONTRACT',
+    provider: { getTransaction: async () => ({ network: 'TRC20', toAddress: 'T123', tokenContract: 'TCONTRACT', amountUsdt: 7, confirmations: 0, success: false, pending: true }) }
+  });
+  const result = await verifier.verify({ txid: 'abc', invoice: { amountUsdt: 7, network: 'TRC20', receivingAddress: 'T123' } });
+  assert.equal(result.status, 'confirming');
+  assert.equal(result.reason, 'transaction_pending');
+});
+
 test('TronGrid provider normalizes a confirmed TRC20 transfer', async () => {
   const txid = 'a'.repeat(64);
   const receivingAddress = 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuW';
