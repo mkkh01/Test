@@ -755,8 +755,6 @@ app.post('/api/intake', rateLimit('intake-submit', 6, 60 * 60 * 1000), async (re
   }
 });
 
-app.use((_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
 const handleCronTrigger = async (req, res) => {
   if (!cronAuthorized(req)) return res.status(401).json({ ok: false, error: 'Unauthorized cron trigger.' });
   if (cronRunning) return res.status(409).json({ ok: false, status: 'already_running' });
@@ -772,5 +770,7 @@ const handleCronTrigger = async (req, res) => {
 
 app.post('/api/internal/cron/run', handleCronTrigger);
 app.get('/api/internal/cron/run', handleCronTrigger);
+
+app.use((_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.listen(port, '0.0.0.0', () => console.log(`Server listening on port ${port}`));
