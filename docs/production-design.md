@@ -2,46 +2,47 @@
 
 ## الهدف
 
-يعمل النظام كمتجر رقمي يستقبل طلبًا، ينشئ فاتورة USDT على شبكة TRC20، يسمح للعميل بإرسال TxID، يتحقق الخادم من المعاملة عبر TronGrid، ثم يسلّم الحزمة الرقمية من خلال رمز تنزيل مؤقت. تبقى كل عمليات الدفع والتسليم حتمية وقابلة للتدقيق، بينما تستخدم Gemini فقط لتحليل المحتوى العام وصياغة مسودات، ولا ترسل رسائل خارجية دون موافقة بشرية.
+يعمل النظام كمتجر رقمي يستقبل طلبًا، ينشئ فاتورة USDT-SPL على شبكة Solana، يسمح للعميل بإرسال transaction signature، يتحقق الخادم من المعاملة عبر Solana JSON-RPC، ثم يسلّم الحزمة الرقمية من خلال رمز تنزيل مؤقت. تبقى كل عمليات الدفع والتسليم حتمية وقابلة للتدقيق، بينما تستخدم Gemini فقط لتحليل المحتوى العام وصياغة مسودات، ولا ترسل رسائل خارجية دون موافقة بشرية.
 
 ## دورة الطلب والدفع
 
 | الحالة | الحدث الذي ينقل إليها | الإجراء المسموح |
 |---|---|---|
 | `awaiting_payment` | إنشاء الطلب والفاتورة | عرض الشبكة والعنوان والمبلغ ووقت الانتهاء |
-| `payment_detected` | وصول TxID صالح مبدئيًا | حفظ TxID مرة واحدة وتشغيل فحص التحقق |
+| `payment_detected` | وصول transaction signature صالح مبدئيًا | حفظ transaction signature مرة واحدة وتشغيل فحص التحقق |
 | `confirming` | المعاملة صحيحة لكن التأكيدات أقل من الحد | إعادة الفحص بفاصل متزايد، من دون اعتماد الدفع |
 | `paid` | اكتمال كل شروط التحقق | إنشاء رمز تنزيل أحادي المصدر وإرسال رابط للعميل |
 | `manual_review` | تعارض أو استجابة مزود غير حاسمة أو استثناء | إيقاف التسليم وإظهار الحالة للإدارة |
 | `expired` | انتهاء الفاتورة قبل الدفع | رفض الدفع المتأخر أو إحالته للمراجعة اليدوية |
 | `cancelled` | إلغاء إداري صريح | عدم قبول أي دفع جديد |
 
-يجب أن تكون عملية اعتماد الدفع ذرّية داخل PostgreSQL. يُقفل الطلب والفاتورة، ويُتحقق من عدم وجود TxID سابق، ثم تُحفظ نتيجة الدفع ويُحدّث الطلب والفاتورة في معاملة واحدة. لا يجوز أن يصبح الطلب `paid` اعتمادًا على وجود TxID وحده.
+يجب أن تكون عملية اعتماد الدفع ذرّية داخل PostgreSQL. يُقفل الطلب والفاتورة، ويُتحقق من عدم وجود transaction signature سابق، ثم تُحفظ نتيجة الدفع ويُحدّث الطلب والفاتورة في معاملة واحدة. لا يجوز أن يصبح الطلب `paid` اعتمادًا على وجود transaction signature وحده.
 
-إذا فشل التحقق من TxID مرتين بسبب عدم العثور على المعاملة أو عدم تطابقها مع الفاتورة، يزيد `payment_failed_attempts` ويظهر للعميل نموذج مساعدة. يمكنه إرسال TxID أو نص تفاصيل التحويل أو Screenshot صغيرة. يُحفظ الدليل في جدول خاص ولا يُعتمد تلقائيًا؛ يراجع المشرف المعاملة على TRON، ويقارن الشبكة والعقد والمبلغ والتأكيدات والعنوان مع العنوان الحالي في Render، ثم يستخدم الاعتماد اليدوي المسجل في `audit_logs` فقط إذا تطابقت الأدلة. الـScreenshot دليل مساعد وليست إثباتًا وحيدًا.
+إذا فشل التحقق من transaction signature مرتين بسبب عدم العثور على المعاملة أو عدم تطابقها مع الفاتورة، يزيد `payment_failed_attempts` ويظهر للعميل نموذج مساعدة. يمكنه إرسال transaction signature أو نص تفاصيل التحويل أو Screenshot صغيرة. يُحفظ الدليل في جدول خاص ولا يُعتمد تلقائيًا؛ يراجع المشرف المعاملة على Solana، ويقارن الشبكة وUSDT mint والمبلغ وfinalization والعنوان مع العنوان الحالي في Render، ثم يستخدم الاعتماد اليدوي المسجل في `audit_logs` فقط إذا تطابقت الأدلة. الـScreenshot دليل مساعد وليست إثباتًا وحيدًا.
 
-## قواعد TronGrid
+## قواعد Solana JSON-RPC
 
-ينشئ التطبيق `TronGridProvider` server-side فقط. يستعمل `TRONGRID_BASE_URL=https://api.trongrid.io` و`TRONGRID_API_KEY` من متغيرات البيئة، ويرسل المفتاح في ترويسة `TRON-PRO-API-KEY`. يجب أن يستخدم استعلام جسم المعاملة وإيصال التنفيذ معًا، أو سجل TRC20 المفهرس عند الحاجة، ثم يعيد كائنًا موحدًا إلى `UsdtVerifier`.
+ينشئ التطبيق `SolanaRpcProvider` server-side فقط. يستعمل `SOLANA_RPC_URL` و`SOLANA_COMMITMENT=finalized` من متغيرات البيئة، ولا يحتاج إلى private key أو صلاحية توقيع. يطلب `getTransaction` بترميز `jsonParsed`، ويقرأ `meta.err` و`preTokenBalances` و`postTokenBalances`، ثم يطابق USDT mint والمالك المستلم والفرق الموجب في رصيد SPL قبل إعادة كائن موحد إلى `UsdtVerifier`. إذا لم تظهر المعاملة بعد، يستخدم `getSignatureStatuses` ويعيد حالة `confirming` بدل الاعتماد.
 
 الكائن الموحد المطلوب هو:
 
 ```text
 {
   txid,
-  network: "TRC20",
+  network: "SOLANA_SPL",
   fromAddress,
   toAddress,
   tokenContract,
   amountUsdt,
   confirmations,
   success,
-  blockNumber,
+  slot,
+  finalized,
   raw
 }
 ```
 
-لا تُقبل المعاملة إلا إذا تحقق العنوان المستلم، وعقد USDT، وقيمة التحويل، وحالة التنفيذ، وعدد التأكيدات `USDT_MIN_CONFIRMATIONS`, وعدم تكرار TxID، وكون الطلب غير منتهي. تُحفظ الاستجابة الخام في `payments.raw_reference` بعد تنقيتها من أي ترويسات أو مفاتيح.
+لا تُقبل المعاملة إلا إذا تحقق عنوان محفظة Solana المستلم، وUSDT mint، وقيمة التحويل، ونجاح التنفيذ النهائي، و`USDT_MIN_CONFIRMATIONS`, وعدم تكرار signature، وكون الطلب غير منتهي. تُحفظ الاستجابة الخام في `payments.raw_reference` بعد تنقيتها من أي ترويسات أو مفاتيح.
 
 ## نقاط API العامة
 
@@ -49,8 +50,8 @@
 |---|---|---|
 | `POST /api/orders` | إنشاء طلب وفاتورة | تحقق صارم من المنتج والبريد ومعدل الطلب |
 | `GET /api/orders/:orderNumber` | عرض حالة الفاتورة للعميل | لا يعرض بيانات حساسة؛ يحتاج رابط حالة موقّع |
-| `POST /api/orders/:orderNumber/payment` | تقديم TxID | يقبل TxID فقط مع رمز حالة موقّع أو سر طلب، ويطلب دليلًا بعد فشلين |
-| `POST /api/orders/:orderNumber/payment-evidence` | إرسال TxID أو نص التحويل أو Screenshot | رمز حالة موقّع، متاح بعد فشلين، تخزين خاص ومراجعة بشرية |
+| `POST /api/orders/:orderNumber/payment` | تقديم Solana transaction signature | يقبل transaction signature فقط مع رمز حالة موقّع أو سر طلب، ويطلب دليلًا بعد فشلين |
+| `POST /api/orders/:orderNumber/payment-evidence` | إرسال transaction signature أو نص التحويل أو Screenshot | رمز حالة موقّع، متاح بعد فشلين، تخزين خاص ومراجعة بشرية |
 | `GET /api/download/:token` | تنزيل الحزمة | رمز hashed، منتهي، والطلب `paid` فقط |
 | `GET /api/health` | فحص الخدمة | عام، بلا أسرار |
 | `GET /api/admin/summary` | إحصاءات الإدارة | `ADMIN_ACCESS_TOKEN` |
@@ -63,7 +64,7 @@
 
 ## رمز حالة العميل
 
-بعد إنشاء الطلب، يحصل العميل على رمز حالة عشوائي طويل لا يُخزن بصورته الخام. يُستخدم الرمز لعرض الفاتورة وتقديم TxID، مع rate limiting وربطه بالطلب. لا تُعرض بيانات الطلب الداخلية أو نتائج التحليل أو عناوين الإدارة عبر endpoint عام.
+بعد إنشاء الطلب، يحصل العميل على رمز حالة عشوائي طويل لا يُخزن بصورته الخام. يُستخدم الرمز لعرض الفاتورة وتقديم transaction signature، مع rate limiting وربطه بالطلب. لا تُعرض بيانات الطلب الداخلية أو نتائج التحليل أو عناوين الإدارة عبر endpoint عام.
 
 ## التسليم
 
@@ -71,7 +72,7 @@
 
 ## العمال والجدولة
 
-يُستخدم صف `jobs` مع `FOR UPDATE SKIP LOCKED`، ومحاولات محدودة، و`run_after` وdead-letter. لا تستخدم العملية `setInterval` أو polling سريعًا داخل خادم الويب. على Render، يُفصل خادم الويب عن Background Worker لمعالجة `payment_check`, `delivery`, `lead_analyze`, و`cleanup`. ويمكن إضافة Cron Job منخفض التردد لاستعادة الوظائف المتأخرة، بينما يُفحص TxID فقط عند تقديمه أو بفواصل متزايدة أثناء `confirming`.
+يُستخدم صف `jobs` مع `FOR UPDATE SKIP LOCKED`، ومحاولات محدودة، و`run_after` وdead-letter. لا تستخدم العملية `setInterval` أو polling سريعًا داخل خادم الويب. على Render، يُفصل خادم الويب عن Background Worker لمعالجة `payment_check`, `delivery`, `lead_analyze`, و`cleanup`. ويمكن إضافة Cron Job منخفض التردد لاستعادة الوظائف المتأخرة، بينما يُفحص transaction signature فقط عند تقديمه أو بفواصل متزايدة أثناء `confirming`.
 
 ## Gemini
 
@@ -87,12 +88,13 @@
 |---|---|---|
 | `DATABASE_URL` | سري | اتصال PostgreSQL الأساسي |
 | `ADMIN_ACCESS_TOKEN` | سري | حماية الإدارة |
-| `TRONGRID_API_KEY` | سري | قراءة شبكة TRON |
-| `TRONGRID_BASE_URL` | غير سري | `https://api.trongrid.io` |
-| `USDT_NETWORK` | غير سري | `TRC20` |
+| `SOLANA_RPC_URL` | غير سري/تشغيلي | Solana Mainnet JSON-RPC |
+| `SOLANA_COMMITMENT` | غير سري | `finalized` |
+| `USDT_NETWORK` | غير سري | `SOLANA_SPL` |
 | `USDT_RECEIVING_ADDRESS` | حساس تشغيليًا | عنوان الاستقبال العام |
-| `USDT_TOKEN_CONTRACT` | غير سري | عقد USDT TRC20 الصحيح |
-| `USDT_MIN_CONFIRMATIONS` | غير سري | `3` |
+| `SOLANA_USDT_MINT` | غير سري | mint الرسمي لـUSDT على Solana |
+| `USDT_TOKEN_CONTRACT` | غير سري | اسم توافق للمَنت |
+| `USDT_MIN_CONFIRMATIONS` | غير سري | `1` مع finalized |
 | `GEMINI_API_KEY_1..5` | أسرار | تدوير مفاتيح Gemini ضمن الشروط |
 | `GEMINI_MODEL` | غير سري | نموذج التحليل |
 | `TELEGRAM_BOT_TOKEN` | سري | Bot API |
@@ -103,4 +105,4 @@
 
 ## قبول الإنتاج
 
-لا تُعتبر النسخة تجارية مكتملة إلا بعد نجاح اختبارات provider الوهمية والحقيقية المحدودة، واختبارات TxID المكرر، والمبلغ الناقص، والعقد الخاطئ، والعنوان الخاطئ، والتأكيدات الناقصة، والانتهاء، وإعادة المحاولة، والتنزيل بعد الدفع، وعدم التسليم قبل الدفع. يجب أن يظهر `/api/health` أن `postgresConfigured=true` وأن verifier مهيأ فقط عندما يكون provider ومعلومات USDT الصحيحة متاحة.
+لا تُعتبر النسخة تجارية مكتملة إلا بعد نجاح اختبارات provider الوهمية والحقيقية المحدودة، واختبارات transaction signature المكرر، والمبلغ الناقص، والعقد الخاطئ، والعنوان الخاطئ، والتأكيدات الناقصة، والانتهاء، وإعادة المحاولة، والتنزيل بعد الدفع، وعدم التسليم قبل الدفع. يجب أن يظهر `/api/health` أن `postgresConfigured=true` وأن verifier مهيأ فقط عندما يكون provider ومعلومات USDT الصحيحة متاحة.

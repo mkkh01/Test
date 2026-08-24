@@ -1,4 +1,4 @@
-const SUPPORTED_NETWORKS = new Set(['TRC20']);
+const SUPPORTED_NETWORKS = new Set(['SOLANA_SPL']);
 
 function normalize(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -10,7 +10,7 @@ function asNumber(value) {
 }
 
 export class UsdtVerifier {
-  constructor({ network = process.env.USDT_NETWORK || 'TRC20', receivingAddress = process.env.USDT_RECEIVING_ADDRESS || '', tokenContract = process.env.USDT_TOKEN_CONTRACT || '', provider } = {}) {
+  constructor({ network = process.env.USDT_NETWORK || 'SOLANA_SPL', receivingAddress = process.env.USDT_RECEIVING_ADDRESS || '', tokenContract = process.env.SOLANA_USDT_MINT || process.env.USDT_TOKEN_CONTRACT || '', provider } = {}) {
     this.network = normalize(network);
     this.receivingAddress = normalize(receivingAddress);
     this.tokenContract = normalize(tokenContract);
@@ -46,19 +46,21 @@ export class UsdtVerifier {
       if ([403, 429].includes(error?.status)) return { ok: false, status: 'manual_review', reason: 'provider_rate_limited' };
       throw error;
     }
+
     const amount = asNumber(transaction?.amountUsdt);
     const sameNetwork = normalize(transaction?.network) === this.network;
     const sameReceiver = normalize(transaction?.toAddress) === this.receivingAddress;
     const sameContract = normalize(transaction?.tokenContract) === this.tokenContract;
-    if (transaction?.pending === true) return { ok: false, status: 'confirming', reason: 'transaction_pending', transaction };
     const successful = transaction?.success === true;
+    const finalized = transaction?.finalized === true;
     const enoughConfirmations = Number(transaction?.confirmations || 0) >= Number(process.env.USDT_MIN_CONFIRMATIONS || 1);
     const exactAmount = amount !== null && amount >= invoiceCheck.amount;
 
+    if (transaction?.pending === true) return { ok: false, status: 'confirming', reason: 'transaction_pending', transaction };
     if (!successful || !sameNetwork || !sameReceiver || !sameContract || !exactAmount) {
       return { ok: false, status: 'rejected', reason: 'transaction_does_not_match_invoice', transaction };
     }
-    if (!enoughConfirmations) return { ok: false, status: 'confirming', reason: 'waiting_for_confirmations', transaction };
+    if (!finalized || !enoughConfirmations) return { ok: false, status: 'confirming', reason: 'waiting_for_finalization', transaction };
     return { ok: true, status: 'confirmed', transaction };
   }
 }

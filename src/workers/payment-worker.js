@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import pg from 'pg';
 import { createDownloadToken, hashDownloadToken } from '../delivery/download-token.js';
-import { TronGridProvider } from '../integrations/trongrid-provider.js';
+import { SolanaRpcProvider } from '../integrations/solana-rpc-provider.js';
 import { UsdtVerifier } from '../integrations/usdt-verifier.js';
 
 const configuredSupabaseValue = process.env.SUPABASE_URL?.trim() || '';
@@ -9,7 +9,7 @@ const databaseUrl = process.env.DATABASE_URL?.trim() || (configuredSupabaseValue
 const pool = databaseUrl
   ? new pg.Pool({ connectionString: databaseUrl, max: Number(process.env.DB_POOL_MAX || 5), idleTimeoutMillis: 30_000, connectionTimeoutMillis: 8_000, ssl: databaseUrl.includes('supabase.com') ? { rejectUnauthorized: false } : undefined })
   : null;
-const provider = new TronGridProvider();
+const provider = new SolanaRpcProvider();
 const verifier = new UsdtVerifier({ provider: provider.configured ? provider : null });
 
 function clean(value, max = 256) {
@@ -98,9 +98,9 @@ async function processJob(job) {
       return { jobId: job.id, status: 'manual_review' };
     }
     if (existing.rows[0]) {
-      await client.query('update public.payments set network = $1, token_contract = $2, from_address = $3, to_address = $4, amount_usdt = $5, confirmations = $6, status = $7, provider = $8, raw_reference = $9, verified_at = $10, updated_at = now() where id = $11', [transaction.network || order.network, transaction.tokenContract || '', transaction.fromAddress || null, transaction.toAddress || '', Number(transaction.amountUsdt || 0), Number(transaction.confirmations || 0), paymentStatus, 'trongrid', JSON.stringify(transaction.raw || transaction), verification.status === 'confirmed' ? new Date().toISOString() : null, existing.rows[0].id]);
+      await client.query('update public.payments set network = $1, token_contract = $2, from_address = $3, to_address = $4, amount_usdt = $5, confirmations = $6, status = $7, provider = $8, raw_reference = $9, verified_at = $10, updated_at = now() where id = $11', [transaction.network || order.network, transaction.tokenContract || '', transaction.fromAddress || null, transaction.toAddress || '', Number(transaction.amountUsdt || 0), Number(transaction.confirmations || 0), paymentStatus, 'solana-rpc', JSON.stringify(transaction.raw || transaction), verification.status === 'confirmed' ? new Date().toISOString() : null, existing.rows[0].id]);
     } else {
-      await client.query('insert into public.payments (invoice_id, txid, network, token_contract, from_address, to_address, amount_usdt, confirmations, status, provider, raw_reference, verified_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [locked.invoice_id, txid, transaction.network || order.network, transaction.tokenContract || '', transaction.fromAddress || null, transaction.toAddress || '', Number(transaction.amountUsdt || 0), Number(transaction.confirmations || 0), paymentStatus, 'trongrid', JSON.stringify(transaction.raw || transaction), verification.status === 'confirmed' ? new Date().toISOString() : null]);
+      await client.query('insert into public.payments (invoice_id, txid, network, token_contract, from_address, to_address, amount_usdt, confirmations, status, provider, raw_reference, verified_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [locked.invoice_id, txid, transaction.network || order.network, transaction.tokenContract || '', transaction.fromAddress || null, transaction.toAddress || '', Number(transaction.amountUsdt || 0), Number(transaction.confirmations || 0), paymentStatus, 'solana-rpc', JSON.stringify(transaction.raw || transaction), verification.status === 'confirmed' ? new Date().toISOString() : null]);
     }
     if (verification.status === 'confirmed') {
       const downloadToken = createDownloadToken();
@@ -147,7 +147,7 @@ export async function runPaymentWorker({ limit = 10 } = {}) {
       await pool.query('update public.jobs set status = case when attempts >= 3 then \'dead_letter\' else \'queued\' end, run_after = now() + interval \'5 minutes\', locked_at = null, last_error = $1, updated_at = now() where id = $2', [String(error.message).slice(0, 1000), job.id]);
     }
   }
-  return { mode: 'postgres-trongrid', processed: results.length, results };
+  return { mode: 'postgres-solana-rpc', processed: results.length, results };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

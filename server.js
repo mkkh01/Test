@@ -9,7 +9,7 @@ import { createDownloadToken, hashDownloadToken, isTokenExpired } from './src/de
 import { productBundles } from './src/delivery/product-manifest.js';
 import { GeminiRouter } from './src/integrations/gemini-router.js';
 import { TelegramBot } from './src/integrations/telegram-bot.js';
-import { TronGridProvider } from './src/integrations/trongrid-provider.js';
+import { SolanaRpcProvider } from './src/integrations/solana-rpc-provider.js';
 import { UsdtVerifier } from './src/integrations/usdt-verifier.js';
 import { requireAdmin } from './src/auth/admin-auth.js';
 
@@ -35,8 +35,8 @@ const pgPool = databaseUrl
   : null;
 const geminiRouter = new GeminiRouter();
 const telegramBot = new TelegramBot();
-const tronGridProvider = new TronGridProvider();
-const usdtVerifier = new UsdtVerifier({ provider: tronGridProvider.configured ? tronGridProvider : null });
+const solanaRpcProvider = new SolanaRpcProvider();
+const usdtVerifier = new UsdtVerifier({ provider: solanaRpcProvider.configured ? solanaRpcProvider : null });
 const products = [
   {
     slug: 'client-payment-scope-protection-complete',
@@ -50,7 +50,7 @@ const products = [
     slug: 'client-payment-scope-protection-starter',
     name: 'Client Payment & Scope Protection Kit — Starter',
     tagline: 'Start with the essentials for your next client project.',
-    priceUsdt: 3,
+    priceUsdt: 5,
     tier: 'Starter',
     includes: ['Proposal template', 'Scope of Work template', 'Deposit request email', 'Five payment follow-up emails']
   },
@@ -58,7 +58,7 @@ const products = [
     slug: 'client-payment-scope-protection-agency',
     name: 'Client Payment & Scope Protection Kit — Agency',
     tagline: 'A structured client workflow for small agencies and teams.',
-    priceUsdt: 12,
+    priceUsdt: 10,
     tier: 'Agency',
     includes: ['Everything in Complete', 'Agency project tracker', 'Team approval flow', 'Client communication log', 'Profitability worksheet']
   }
@@ -78,9 +78,9 @@ function hasDatabase() {
 
 function paymentConfig() {
   return {
-    network: cleanText(process.env.USDT_NETWORK, 30) || 'TRC20',
+    network: cleanText(process.env.USDT_NETWORK, 30) || 'SOLANA_SPL',
     receivingAddress: cleanText(process.env.USDT_RECEIVING_ADDRESS, 128),
-    tokenContract: cleanText(process.env.USDT_TOKEN_CONTRACT, 128),
+    tokenContract: cleanText(process.env.SOLANA_USDT_MINT || process.env.USDT_TOKEN_CONTRACT, 128),
     minConfirmations: Number(process.env.USDT_MIN_CONFIRMATIONS || 1)
   };
 }
@@ -172,8 +172,8 @@ async function enqueueJob(client, jobType, dedupeKey, payload, runAfter = new Da
 }
 
 function txidError(error) {
-  if (error?.code === 'TX_NOT_FOUND') return { status: 404, body: { ok: false, status: 'rejected', reason: 'transaction_not_found', error: 'Transaction not found on TRON.' } };
-  if (error?.code === 'INVALID_TXID') return { status: 400, body: { ok: false, status: 'rejected', reason: 'invalid_txid', error: 'Enter a valid TRON transaction ID.' } };
+  if (error?.code === 'TX_NOT_FOUND') return { status: 404, body: { ok: false, status: 'rejected', reason: 'transaction_not_found', error: 'Transaction not found on Solana.' } };
+  if (error?.code === 'INVALID_TXID') return { status: 400, body: { ok: false, status: 'rejected', reason: 'invalid_txid', error: 'Enter a valid Solana transaction signature.' } };
   if ([403, 429].includes(error?.status)) return { status: 503, body: { ok: false, status: 'manual_review', reason: 'provider_rate_limited', error: 'Blockchain verification is temporarily rate-limited. Please try again later.' } };
   return null;
 }
@@ -223,7 +223,7 @@ app.get('/api/health', (_req, res) => {
     dataStore: pgPool ? 'postgres' : supabase ? 'supabase-rest' : 'demo',
     telegramConfigured: telegramBot.configured,
     geminiKeyCount: geminiRouter.keys.length,
-    tronGridConfigured: tronGridProvider.configured,
+    solanaRpcConfigured: solanaRpcProvider.configured,
     usdtConfigured: usdtVerifier.configured,
     usdtMinConfirmations: paymentConfig().minConfirmations
   });
@@ -578,7 +578,7 @@ app.post('/api/orders/:orderNumber/payment', rateLimit('payment-submit', 12, 15 
           await client.query('commit');
           return res.status(409).json({ ok: false, status: 'rejected', reason: 'txid_already_used', paymentFailedAttempts: duplicateAttempts, paymentEvidenceRequested: duplicateAttempts >= 2, error: 'This transaction ID has already been submitted.' });
         }
-        const paymentValues = [transaction.network || order.network, transaction.tokenContract || '', transaction.fromAddress || null, transaction.toAddress || '', Number(transaction.amountUsdt || 0), Number(transaction.confirmations || 0), paymentStatus, 'trongrid', JSON.stringify(transaction.raw || transaction), resultStatus === 'confirmed' ? new Date().toISOString() : null];
+        const paymentValues = [transaction.network || order.network, transaction.tokenContract || '', transaction.fromAddress || null, transaction.toAddress || '', Number(transaction.amountUsdt || 0), Number(transaction.confirmations || 0), paymentStatus, 'solana-rpc', JSON.stringify(transaction.raw || transaction), resultStatus === 'confirmed' ? new Date().toISOString() : null];
         if (existingPayment.rows[0]) {
           await client.query('update public.payments set network = $1, token_contract = $2, from_address = $3, to_address = $4, amount_usdt = $5, confirmations = $6, status = $7, provider = $8, raw_reference = $9, verified_at = $10, updated_at = now() where id = $11', [...paymentValues, existingPayment.rows[0].id]);
         } else {
@@ -600,7 +600,7 @@ app.post('/api/orders/:orderNumber/payment', rateLimit('payment-submit', 12, 15 
           const downloadExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
           await client.query('update public.orders set status = $1, download_token_hash = $2, download_expires_at = $3, updated_at = now() where id = $4', ['paid', downloadTokenHash, downloadExpiresAt, order.id]);
           await client.query('update public.invoices set status = $1, updated_at = now() where id = $2', ['paid', current.invoice_id]);
-          await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['integration', 'payment_confirmed', 'order', order.id, JSON.stringify({ txid, provider: 'trongrid', confirmations: transaction.confirmations })]);
+          await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['integration', 'payment_confirmed', 'order', order.id, JSON.stringify({ txid, provider: 'solana-rpc', confirmations: transaction.confirmations })]);
           await client.query('commit');
           return res.json({ ok: true, status: 'confirmed', order: publicOrder({ ...order, status: 'paid', invoiceStatus: 'paid' }, { downloadToken }) });
         }
@@ -609,7 +609,7 @@ app.post('/api/orders/:orderNumber/payment', rateLimit('payment-submit', 12, 15 
         await client.query('update public.orders set status = $1, updated_at = now() where id = $2', [newOrderStatus, order.id]);
         await client.query('update public.invoices set status = $1, updated_at = now() where id = $2', [newInvoiceStatus, current.invoice_id]);
         if (resultStatus === 'confirming') await enqueueJob(client, 'payment_check', `payment_check:${order.id}:${txid}`, { orderId: order.id, txid });
-        await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['integration', `payment_${paymentStatus}`, 'order', order.id, JSON.stringify({ txid, provider: 'trongrid', confirmations: transaction.confirmations || 0, reason: verification.reason || null, failedAttempts })]);
+        await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['integration', `payment_${paymentStatus}`, 'order', order.id, JSON.stringify({ txid, provider: 'solana-rpc', confirmations: transaction.confirmations || 0, reason: verification.reason || null, failedAttempts })]);
         await client.query('commit');
       } catch (error) {
         await client.query('rollback');

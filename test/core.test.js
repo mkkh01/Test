@@ -5,11 +5,14 @@ import { UsdtVerifier } from '../src/integrations/usdt-verifier.js';
 import { createDownloadToken, hashDownloadToken, tokenMatches, isTokenExpired } from '../src/delivery/download-token.js';
 import { GeminiRouter } from '../src/integrations/gemini-router.js';
 import { TelegramBot } from '../src/integrations/telegram-bot.js';
-import { TronGridProvider } from '../src/integrations/trongrid-provider.js';
+import { SolanaRpcProvider } from '../src/integrations/solana-rpc-provider.js';
 
 const fakeFetch = async (url, options = {}) => ({ ok: true, status: 200, json: async () => ({ ok: true, url, options }) });
+const receivingAddress = 'ES5uuF9x1XhipfPyKa7H5uLVEkjKXJ9w2MNFXBgphjVB';
+const tokenMint = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+const validSignature = '5'.repeat(64);
 
-test('candidate scoring prioritizes direct payment and scope problems', () => {
+ test('candidate scoring prioritizes direct payment and scope problems', () => {
   const score = scoreCandidate({ title: 'Client has not paid my late invoice', body: 'How do I handle scope creep?' });
   assert.ok(score >= 60);
 });
@@ -33,52 +36,63 @@ test('RSS parser extracts a useful public item', () => {
 
 test('USDT verifier rejects wrong network before provider access', async () => {
   let called = false;
-  const verifier = new UsdtVerifier({ network: 'TRC20', receivingAddress: 'T123', provider: { getTransaction: async () => { called = true; } } });
-  const result = await verifier.verify({ txid: 'abc', invoice: { amountUsdt: 7, network: 'ERC20', receivingAddress: 'T123' } });
+  const verifier = new UsdtVerifier({ network: 'SOLANA_SPL', receivingAddress, provider: { getTransaction: async () => { called = true; } } });
+  const result = await verifier.verify({ txid: validSignature, invoice: { amountUsdt: 7, network: 'TRC20', receivingAddress } });
   assert.equal(result.reason, 'unsupported_network');
   assert.equal(called, false);
 });
 
-test('USDT verifier requires a provider and never treats a TxID alone as paid', async () => {
-  const verifier = new UsdtVerifier({ network: 'TRC20', receivingAddress: 'T123', tokenContract: 'TCONTRACT', provider: null });
-  const result = await verifier.verify({ txid: 'abc', invoice: { amountUsdt: 7, network: 'TRC20', receivingAddress: 'T123' } });
+test('USDT verifier requires a provider and never treats a signature alone as paid', async () => {
+  const verifier = new UsdtVerifier({ network: 'SOLANA_SPL', receivingAddress, tokenContract: tokenMint, provider: null });
+  const result = await verifier.verify({ txid: validSignature, invoice: { amountUsdt: 7, network: 'SOLANA_SPL', receivingAddress } });
   assert.equal(result.status, 'manual_review');
 });
 
-test('USDT verifier keeps a pending transaction in confirming state', async () => {
+test('USDT verifier keeps a non-finalized Solana transaction in confirming state', async () => {
   const verifier = new UsdtVerifier({
-    network: 'TRC20',
-    receivingAddress: 'T123',
-    tokenContract: 'TCONTRACT',
-    provider: { getTransaction: async () => ({ network: 'TRC20', toAddress: 'T123', tokenContract: 'TCONTRACT', amountUsdt: 7, confirmations: 0, success: false, pending: true }) }
+    network: 'SOLANA_SPL',
+    receivingAddress,
+    tokenContract: tokenMint,
+    provider: { getTransaction: async () => ({ network: 'SOLANA_SPL', toAddress: receivingAddress, tokenContract: tokenMint, amountUsdt: 7, confirmations: 0, finalized: false, success: true, pending: false }) }
   });
-  const result = await verifier.verify({ txid: 'abc', invoice: { amountUsdt: 7, network: 'TRC20', receivingAddress: 'T123' } });
+  const result = await verifier.verify({ txid: validSignature, invoice: { amountUsdt: 7, network: 'SOLANA_SPL', receivingAddress } });
   assert.equal(result.status, 'confirming');
-  assert.equal(result.reason, 'transaction_pending');
+  assert.equal(result.reason, 'waiting_for_finalization');
 });
 
-test('TronGrid provider normalizes a confirmed TRC20 transfer', async () => {
-  const txid = 'a'.repeat(64);
-  const receivingAddress = 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuW';
-  const tokenContract = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
-  const provider = new TronGridProvider({
-    apiKey: 'test-key',
+test('Solana provider normalizes a confirmed USDT SPL transfer', async () => {
+  const provider = new SolanaRpcProvider({
+    rpcUrl: 'https://rpc.example.test',
     receivingAddress,
-    tokenContract,
-    fetchImpl: async (url, options = {}) => {
-      if (url.endsWith('/wallet/gettransactionbyid')) return { ok: true, status: 200, json: async () => ({ txID: txid, raw_data: { contract: [] } }) };
-      if (url.endsWith('/wallet/gettransactioninfobyid')) return { ok: true, status: 200, json: async () => ({ id: txid, blockNumber: 100, receipt: { result: 'SUCCESS' } }) };
-      if (url.includes('/v1/accounts/')) return { ok: true, status: 200, json: async () => ({ data: [{ transaction_id: txid, from_address: 'TJRabPrwbZy45sbavfcjinPJC18kjp31W', to_address: receivingAddress, contract_address: tokenContract, amount_str: '7000000', decimals: 6, status: 0, token_info: { address: tokenContract } }] }) };
-      if (url.endsWith('/wallet/getnowblock')) return { ok: true, status: 200, json: async () => ({ block_header: { raw_data: { number: 102 } } }) };
-      return { ok: false, status: 404, json: async () => ({}) };
+    tokenContract: tokenMint,
+    commitment: 'finalized',
+    fetchImpl: async (_url, options = {}) => {
+      const request = JSON.parse(options.body);
+      assert.equal(request.method, 'getTransaction');
+      return { ok: true, status: 200, json: async () => ({ result: {
+        slot: 100,
+        meta: {
+          err: null,
+          preTokenBalances: [
+            { accountIndex: 0, mint: tokenMint, owner: 'Sender111111111111111111111111111111111111111', uiTokenAmount: { amount: '7000000', decimals: 6 } },
+            { accountIndex: 1, mint: tokenMint, owner: receivingAddress, uiTokenAmount: { amount: '0', decimals: 6 } }
+          ],
+          postTokenBalances: [
+            { accountIndex: 0, mint: tokenMint, owner: 'Sender111111111111111111111111111111111111111', uiTokenAmount: { amount: '0', decimals: 6 } },
+            { accountIndex: 1, mint: tokenMint, owner: receivingAddress, uiTokenAmount: { amount: '7000000', decimals: 6 } }
+          ]
+        },
+        transaction: { message: { accountKeys: ['SenderToken11111111111111111111111111111111', 'ReceiverToken1111111111111111111111111111111'] }, signatures: [validSignature] }
+      }}) };
     }
   });
-  const result = await provider.getTransaction(txid);
-  assert.equal(result.network, 'TRC20');
+  const result = await provider.getTransaction(validSignature);
+  assert.equal(result.network, 'SOLANA_SPL');
   assert.equal(result.toAddress, receivingAddress);
-  assert.equal(result.tokenContract, tokenContract);
+  assert.equal(result.tokenContract, tokenMint);
   assert.equal(result.amountUsdt, 7);
-  assert.equal(result.confirmations, 3);
+  assert.equal(result.confirmations, 1);
+  assert.equal(result.finalized, true);
   assert.equal(result.success, true);
 });
 

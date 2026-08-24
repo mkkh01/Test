@@ -9,7 +9,7 @@ A small, English-first digital product storefront for the **Client Payment & Sco
 - Responsive landing page, pricing cards, free-sample intake form, checkout form, admin summary page, and health endpoint.
 - Supabase PostgreSQL schema for products, orders, invoices, payments, leads, source items, analyses, outreach messages, jobs, and audit logs.
 - Private-by-default database permissions with Row Level Security and server-side service-role access only.
-- TronGrid USDT verification provider, protected customer status token, TxID submission, atomic payment state transitions, secure download release, and admin payment review endpoints.
+- Solana JSON-RPC USDT-SPL verification provider, protected customer status token, transaction-signature submission, atomic payment state transitions, secure download release, and admin payment review endpoints.
 - Gemini, Telegram, and USDT integration modules remain server-side; no real credentials are committed to the repository.
 - Public-source discovery adapters for Hacker News, Bluesky, and RSS are present, with queue-backed lead analysis and Render worker/Cron entrypoints.
 
@@ -37,13 +37,14 @@ Required later integrations:
 - `SUPABASE_SERVICE_ROLE_KEY` (compatibility fallback)
 - `TELEGRAM_BOT_TOKEN`
 - `GEMINI_API_KEY_1` through `GEMINI_API_KEY_5`
-- `USDT_NETWORK`
-- `USDT_RECEIVING_ADDRESS`
-- `USDT_TOKEN_CONTRACT`
-- `USDT_TOKEN_DECIMALS`
-- `USDT_MIN_CONFIRMATIONS`
-- `TRONGRID_BASE_URL`
-- `TRONGRID_API_KEY`
+- `USDT_NETWORK` (set to `SOLANA_SPL`)
+- `USDT_RECEIVING_ADDRESS` (the Solana wallet address)
+- `SOLANA_USDT_MINT` (the official Solana USDT mint)
+- `USDT_TOKEN_CONTRACT` (compatibility alias for the mint)
+- `USDT_TOKEN_DECIMALS` (6)
+- `USDT_MIN_CONFIRMATIONS` (1 after finalized commitment)
+- `SOLANA_RPC_URL`
+- `SOLANA_COMMITMENT` (confirmed or finalized)
 - `TELEGRAM_WEBHOOK_SECRET`
 - `PUBLIC_BASE_URL`
 
@@ -55,14 +56,14 @@ Open `/admin.html` only from a trusted device after setting `ADMIN_ACCESS_TOKEN`
 
 ## Payment flow
 
-The customer creates an order and receives a customer-scoped status token. The storefront shows the exact USDT amount, TRC20 network, receiving address, and expiry. The customer submits a TxID through the status-token endpoint. The server reads the transaction through TronGrid, checks the transaction receipt, TRC20 contract, destination address, amount, confirmation count, expiry, and TxID uniqueness. Only a confirmed result changes the order and invoice to `paid`, creates a short-lived download token, and releases the matching ZIP bundle. A confirming result is queued for later recheck; provider rate limits or ambiguous results go to manual review.
+The customer creates an order and receives a customer-scoped status token. The storefront shows the exact USDT amount, Solana network, receiving address, and expiry. The customer submits a Solana transaction signature through the status-token endpoint. The server reads the transaction through Solana JSON-RPC, checks successful finalized execution, the USDT SPL mint, destination token-account owner, token balance delta, amount, expiry, and signature uniqueness. Only a confirmed result changes the order and invoice to `paid`, creates a short-lived download token, and releases the matching ZIP bundle. A confirming result is queued for later recheck; provider rate limits or ambiguous results go to manual review.
 
 ## Integration modules
 
 - `src/integrations/gemini-router.js` rotates up to five configured Gemini API keys with local failure backoff and no key values in code.
 - `src/integrations/telegram-bot.js` provides webhook and message helpers while remaining disabled without `TELEGRAM_BOT_TOKEN`.
-- `src/integrations/usdt-verifier.js` validates invoice data and transaction results through the TronGrid provider; it never handles a private key.
-- `src/integrations/trongrid-provider.js` reads TRON transaction bodies, receipts, TRC20 transfer history, and current block height using a server-side API key.
+- `src/integrations/usdt-verifier.js` validates invoice data and transaction results through the Solana provider; it never handles a private key.
+- `src/integrations/solana-rpc-provider.js` reads finalized Solana transactions and SPL token balance changes through JSON-RPC; it requires no signing key.
 - `src/discovery/public-sources.js` includes public Hacker News, Bluesky, and RSS candidate collectors with keyword filtering, deduplication, and a deterministic fit score.
 - `src/workers/discovery-worker.js` collects candidates and queues lead-analysis jobs in Supabase; it runs in dry-run mode when Supabase server credentials are absent.
 
@@ -81,7 +82,7 @@ It has been applied to the confirmed Supabase project. The server is configured 
 ## Product flow
 
 ```text
-Storefront → free sample / intake → order → USDT invoice → blockchain verification → secure download
+Storefront → free sample / intake → order → USDT-SPL invoice → Solana verification → secure download
 ```
 
 The payment module verifies a successful transaction, correct network, correct token contract, destination address, amount, confirmations, invoice expiry, and TxID uniqueness. It never receives or stores a wallet private key. The Render web service handles customer requests; `npm run worker:cron` is the one-shot queue processor for a Render Cron Job, and `npm run worker:run` is the continuous worker command for a paid Render Background Worker.
@@ -111,6 +112,6 @@ npm run check
 npm test
 ```
 
-The test suite covers candidate scoring, deduplication, RSS parsing, unsupported payment networks, and the rule that a TxID alone never counts as a confirmed payment.
+The test suite covers candidate scoring, deduplication, RSS parsing, unsupported payment networks, Solana SPL transfer normalization, finalized-payment rules, and the rule that a signature alone never counts as a confirmed payment.
 
 The repository contains the production payment workflow and tested provider adapter. Real credentials remain controlled Render settings. Telegram outbound messages are limited to opted-in bot users, and public-source outreach remains draft-only until a human approves it.

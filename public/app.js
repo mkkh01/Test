@@ -23,9 +23,9 @@ const downloadLink = document.getElementById('downloadLink');
 const formStatus = document.getElementById('formStatus');
 
 const productLabels = {
-  starter: { slug: 'client-payment-scope-protection-starter', label: 'Starter — 3 USDT', priceUsdt: 3 },
+  starter: { slug: 'client-payment-scope-protection-starter', label: 'Starter — 5 USDT', priceUsdt: 5 },
   complete: { slug: 'client-payment-scope-protection-complete', label: 'Complete — 7 USDT', priceUsdt: 7 },
-  agency: { slug: 'client-payment-scope-protection-agency', label: 'Agency — 12 USDT', priceUsdt: 12 }
+  agency: { slug: 'client-payment-scope-protection-agency', label: 'Agency — 10 USDT', priceUsdt: 10 },
 };
 
 async function loadLiveProductPrices() {
@@ -68,7 +68,7 @@ function renderPaymentInstructions(order) {
   evidenceForm?.classList.add('hidden');
   evidenceForm?.reset();
   setStatus(evidenceStatus, '');
-  setStatus(paymentStatus, 'After sending the exact amount, paste the TRON TxID below.', '#687386');
+  setStatus(paymentStatus, 'After sending the exact USDT amount, paste the Solana transaction signature below.', '#687386');
   paymentPanel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   startOrderStatusPolling();
 }
@@ -161,7 +161,7 @@ txidForm?.addEventListener('submit', async (event) => {
     return;
   }
   const txid = paymentTxid.value.trim();
-  setStatus(paymentStatus, 'Checking the transaction on TRON…');
+  setStatus(paymentStatus, 'Checking the transaction on Solana…');
   try {
     const response = await fetch(activeOrder.submitTxidUrl, {
       method: 'POST',

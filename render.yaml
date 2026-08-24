@@ -40,18 +40,20 @@ services:
       - key: GEMINI_API_KEY_5
         sync: false
       - key: USDT_NETWORK
-        value: TRC20
+        value: SOLANA_SPL
       - key: USDT_RECEIVING_ADDRESS
-        sync: false
+        value: ES5uuF9x1XhipfPyKa7H5uLVEkjKXJ9w2MNFXBgphjVB
+      - key: SOLANA_USDT_MINT
+        value: Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB
       - key: USDT_TOKEN_CONTRACT
-        value: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
+        value: Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB
       - key: USDT_TOKEN_DECIMALS
         value: "6"
       - key: USDT_MIN_CONFIRMATIONS
-        value: "3"
-      - key: TRONGRID_BASE_URL
-        value: https://api.trongrid.io
-      - key: TRONGRID_API_KEY
-        sync: false
+        value: "1"
+      - key: SOLANA_RPC_URL
+        value: https://api.mainnet-beta.solana.com
+      - key: SOLANA_COMMITMENT
+        value: finalized
       - key: DOWNLOAD_TOKEN_TTL_HOURS
         value: "72"

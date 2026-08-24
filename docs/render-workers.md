@@ -1,6 +1,6 @@
 # Render Worker Operations
 
-The web service handles the storefront and synchronous TxID submission. Queue processing must run separately so a web restart cannot lose work.
+The web service handles the storefront and synchronous Solana transaction-signature submission. Queue processing must run separately so a web restart cannot lose work.
 
 ## Recommended low-cost operation
 
@@ -12,7 +12,7 @@ For continuous queue processing, create a Render Background Worker with command 
 
 ## Shared environment
 
-The web service and worker/cron must share `DATABASE_URL`, `DB_POOL_MAX`, `TRONGRID_BASE_URL`, `TRONGRID_API_KEY`, `USDT_NETWORK`, `USDT_RECEIVING_ADDRESS`, `USDT_TOKEN_CONTRACT`, `USDT_TOKEN_DECIMALS`, `USDT_MIN_CONFIRMATIONS`, `GEMINI_MODEL`, `GEMINI_API_KEY_1..5`, `GEMINI_API_KEY_COUNT`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_WEBHOOK_SECRET`. Secrets must be entered in Render, not committed to GitHub.
+The web service and worker/cron must share `DATABASE_URL`, `DB_POOL_MAX`, `SOLANA_RPC_URL`, `SOLANA_COMMITMENT`, `USDT_NETWORK`, `USDT_RECEIVING_ADDRESS`, `SOLANA_USDT_MINT`, `USDT_TOKEN_CONTRACT`, `USDT_TOKEN_DECIMALS`, `USDT_MIN_CONFIRMATIONS`, `GEMINI_MODEL`, `GEMINI_API_KEY_1..5`, `GEMINI_API_KEY_COUNT`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_WEBHOOK_SECRET`. Secrets must be entered in Render, not committed to GitHub.
 
 ## Safety
 
