@@ -5,6 +5,7 @@ import { UsdtVerifier } from '../src/integrations/usdt-verifier.js';
 import { createDownloadToken, hashDownloadToken, tokenMatches, isTokenExpired } from '../src/delivery/download-token.js';
 import { GeminiRouter } from '../src/integrations/gemini-router.js';
 import { TelegramBot } from '../src/integrations/telegram-bot.js';
+import { TronGridProvider } from '../src/integrations/trongrid-provider.js';
 
 const fakeFetch = async (url, options = {}) => ({ ok: true, status: 200, json: async () => ({ ok: true, url, options }) });
 
@@ -39,9 +40,34 @@ test('USDT verifier rejects wrong network before provider access', async () => {
 });
 
 test('USDT verifier requires a provider and never treats a TxID alone as paid', async () => {
-  const verifier = new UsdtVerifier({ network: 'TRC20', receivingAddress: 'T123', provider: null });
+  const verifier = new UsdtVerifier({ network: 'TRC20', receivingAddress: 'T123', tokenContract: 'TCONTRACT', provider: null });
   const result = await verifier.verify({ txid: 'abc', invoice: { amountUsdt: 7, network: 'TRC20', receivingAddress: 'T123' } });
   assert.equal(result.status, 'manual_review');
+});
+
+test('TronGrid provider normalizes a confirmed TRC20 transfer', async () => {
+  const txid = 'a'.repeat(64);
+  const receivingAddress = 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuW';
+  const tokenContract = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+  const provider = new TronGridProvider({
+    apiKey: 'test-key',
+    receivingAddress,
+    tokenContract,
+    fetchImpl: async (url, options = {}) => {
+      if (url.endsWith('/wallet/gettransactionbyid')) return { ok: true, status: 200, json: async () => ({ txID: txid, raw_data: { contract: [] } }) };
+      if (url.endsWith('/wallet/gettransactioninfobyid')) return { ok: true, status: 200, json: async () => ({ id: txid, blockNumber: 100, receipt: { result: 'SUCCESS' } }) };
+      if (url.includes('/v1/accounts/')) return { ok: true, status: 200, json: async () => ({ data: [{ transaction_id: txid, from_address: 'TJRabPrwbZy45sbavfcjinPJC18kjp31W', to_address: receivingAddress, contract_address: tokenContract, amount_str: '7000000', decimals: 6, status: 0, token_info: { address: tokenContract } }] }) };
+      if (url.endsWith('/wallet/getnowblock')) return { ok: true, status: 200, json: async () => ({ block_header: { raw_data: { number: 102 } } }) };
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+  });
+  const result = await provider.getTransaction(txid);
+  assert.equal(result.network, 'TRC20');
+  assert.equal(result.toAddress, receivingAddress);
+  assert.equal(result.tokenContract, tokenContract);
+  assert.equal(result.amountUsdt, 7);
+  assert.equal(result.confirmations, 3);
+  assert.equal(result.success, true);
 });
 
 test('Gemini router rotates after a rate-limited key', async () => {

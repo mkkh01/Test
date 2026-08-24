@@ -21,9 +21,37 @@ services:
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: PUBLIC_BASE_URL
+        value: https://test-p2h3.onrender.com
       - key: GEMINI_API_KEY_COUNT
-        value: "0"
+        value: "5"
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_API_KEY_1
+        sync: false
+      - key: GEMINI_API_KEY_2
+        sync: false
+      - key: GEMINI_API_KEY_3
+        sync: false
+      - key: GEMINI_API_KEY_4
+        sync: false
+      - key: GEMINI_API_KEY_5
+        sync: false
       - key: USDT_NETWORK
         value: TRC20
       - key: USDT_RECEIVING_ADDRESS
         sync: false
+      - key: USDT_TOKEN_CONTRACT
+        value: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
+      - key: USDT_TOKEN_DECIMALS
+        value: "6"
+      - key: USDT_MIN_CONFIRMATIONS
+        value: "3"
+      - key: TRONGRID_BASE_URL
+        value: https://api.trongrid.io
+      - key: TRONGRID_API_KEY
+        sync: false
+      - key: DOWNLOAD_TOKEN_TTL_HOURS
+        value: "72"

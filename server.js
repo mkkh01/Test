@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -6,37 +5,37 @@ import { createClient } from '@supabase/supabase-js';
 import pg from 'pg';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createDownloadToken, hashDownloadToken, isTokenExpired } from './src/delivery/download-token.js';
+import { productBundles } from './src/delivery/product-manifest.js';
 import { GeminiRouter } from './src/integrations/gemini-router.js';
 import { TelegramBot } from './src/integrations/telegram-bot.js';
+import { TronGridProvider } from './src/integrations/trongrid-provider.js';
 import { UsdtVerifier } from './src/integrations/usdt-verifier.js';
 import { requireAdmin } from './src/auth/admin-auth.js';
-import { hashDownloadToken, isTokenExpired } from './src/delivery/download-token.js';
-import { productBundles } from './src/delivery/product-manifest.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
 const port = Number(process.env.PORT || 10000);
-
+const databaseUrl = process.env.DATABASE_URL?.trim();
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = supabaseUrl && supabaseServiceKey
   ? createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } })
   : null;
-const databaseUrl = process.env.DATABASE_URL?.trim();
 const pgPool = databaseUrl
-  ? new pg.Pool({ connectionString: databaseUrl, max: Number(process.env.DB_POOL_MAX || 5), idleTimeoutMillis: 30_000, connectionTimeoutMillis: 8_000, ssl: databaseUrl.includes('supabase.com') ? { rejectUnauthorized: false } : undefined })
+  ? new pg.Pool({
+      connectionString: databaseUrl,
+      max: Number(process.env.DB_POOL_MAX || 5),
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 8_000,
+      ssl: databaseUrl.includes('supabase.com') ? { rejectUnauthorized: false } : undefined
+    })
   : null;
 const geminiRouter = new GeminiRouter();
 const telegramBot = new TelegramBot();
-const usdtVerifier = new UsdtVerifier({ provider: null });
-
-app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.json({ limit: '256kb' }));
-app.use(express.urlencoded({ extended: true, limit: '256kb' }));
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
-app.use(express.static(path.join(__dirname, 'public')));
-
+const tronGridProvider = new TronGridProvider();
+const usdtVerifier = new UsdtVerifier({ provider: tronGridProvider.configured ? tronGridProvider : null });
 const products = [
   {
     slug: 'client-payment-scope-protection-complete',
@@ -72,6 +71,38 @@ function isEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+function hasDatabase() {
+  return Boolean(pgPool || supabase);
+}
+
+function paymentConfig() {
+  return {
+    network: cleanText(process.env.USDT_NETWORK, 30) || 'TRC20',
+    receivingAddress: cleanText(process.env.USDT_RECEIVING_ADDRESS, 128),
+    tokenContract: cleanText(process.env.USDT_TOKEN_CONTRACT, 128),
+    minConfirmations: Number(process.env.USDT_MIN_CONFIRMATIONS || 1)
+  };
+}
+
+function publicOrder(order, { statusToken, downloadToken } = {}) {
+  const result = {
+    orderNumber: order.orderNumber,
+    invoiceNumber: order.invoiceNumber,
+    product: order.product,
+    amountUsdt: Number(order.amountUsdt),
+    network: order.network,
+    receivingAddress: order.receivingAddress,
+    expiresAt: order.expiresAt,
+    status: order.status,
+    invoiceStatus: order.invoiceStatus,
+    statusUrl: statusToken ? `/api/orders/${encodeURIComponent(order.orderNumber)}/status?token=${encodeURIComponent(statusToken)}` : undefined,
+    submitTxidUrl: statusToken ? `/api/orders/${encodeURIComponent(order.orderNumber)}/payment` : undefined
+  };
+  if (statusToken) result.statusToken = statusToken;
+  if (downloadToken) result.downloadUrl = `/api/download/${encodeURIComponent(downloadToken)}`;
+  return result;
+}
+
 async function getProductBySlug(slug) {
   if (pgPool) {
     const result = await pgPool.query('select id, slug, price_usdt from public.products where slug = $1 and active = true limit 1', [slug]);
@@ -82,8 +113,69 @@ async function getProductBySlug(slug) {
     if (error) throw error;
     return data;
   }
+  return products.find((item) => item.slug === slug) || null;
+}
+
+async function getOrderByAccessToken(orderNumber, statusToken) {
+  const tokenHash = hashDownloadToken(statusToken);
+  if (pgPool) {
+    const result = await pgPool.query(`
+      select o.id, o.order_number, o.customer_email, o.customer_name, o.amount_usdt, o.network,
+             o.receiving_address, o.status, o.download_expires_at, p.slug,
+             i.invoice_number, i.status as invoice_status, i.expires_at
+      from public.orders o
+      join public.products p on p.id = o.product_id
+      join public.invoices i on i.order_id = o.id
+      where o.order_number = $1 and o.access_token_hash = $2
+      limit 1`, [orderNumber, tokenHash]);
+    return result.rows[0] || null;
+  }
+  if (supabase) {
+    const { data, error } = await supabase.from('orders').select('id,order_number,customer_email,customer_name,amount_usdt,network,receiving_address,status,download_expires_at,product_id,access_token_hash').eq('order_number', orderNumber).eq('access_token_hash', tokenHash).limit(1).maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const { data: product, error: productError } = await supabase.from('products').select('slug').eq('id', data.product_id).limit(1).maybeSingle();
+    if (productError) throw productError;
+    const { data: invoice, error: invoiceError } = await supabase.from('invoices').select('invoice_number,status,expires_at').eq('order_id', data.id).limit(1).maybeSingle();
+    if (invoiceError) throw invoiceError;
+    return { ...data, slug: product?.slug, invoice_number: invoice?.invoice_number, invoice_status: invoice?.status, expires_at: invoice?.expires_at };
+  }
   return null;
 }
+
+function normalizeOrder(row) {
+  return {
+    id: row.id,
+    orderNumber: row.order_number,
+    invoiceNumber: row.invoice_number,
+    product: row.slug,
+    amountUsdt: Number(row.amount_usdt),
+    network: row.network,
+    receivingAddress: row.receiving_address,
+    status: row.status,
+    invoiceStatus: row.invoice_status,
+    expiresAt: row.expires_at,
+    downloadExpiresAt: row.download_expires_at
+  };
+}
+
+async function enqueueJob(client, jobType, dedupeKey, payload, runAfter = new Date()) {
+  await client.query(`insert into public.jobs (job_type, dedupe_key, payload, run_after) values ($1,$2,$3,$4) on conflict (dedupe_key) do nothing`, [jobType, dedupeKey, JSON.stringify(payload), runAfter]);
+}
+
+function txidError(error) {
+  if (error?.code === 'TX_NOT_FOUND') return { status: 404, body: { ok: false, status: 'rejected', reason: 'transaction_not_found', error: 'Transaction not found on TRON.' } };
+  if (error?.code === 'INVALID_TXID') return { status: 400, body: { ok: false, status: 'rejected', reason: 'invalid_txid', error: 'Enter a valid TRON transaction ID.' } };
+  if ([403, 429].includes(error?.status)) return { status: 503, body: { ok: false, status: 'manual_review', reason: 'provider_rate_limited', error: 'Blockchain verification is temporarily rate-limited. Please try again later.' } };
+  return null;
+}
+
+app.set('trust proxy', 1);
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(express.json({ limit: '256kb' }));
+app.use(express.urlencoded({ extended: true, limit: '256kb' }));
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -95,7 +187,9 @@ app.get('/api/health', (_req, res) => {
     dataStore: pgPool ? 'postgres' : supabase ? 'supabase-rest' : 'demo',
     telegramConfigured: telegramBot.configured,
     geminiKeyCount: geminiRouter.keys.length,
-    usdtConfigured: usdtVerifier.configured
+    tronGridConfigured: tronGridProvider.configured,
+    usdtConfigured: usdtVerifier.configured,
+    usdtMinConfirmations: paymentConfig().minConfirmations
   });
 });
 
@@ -118,7 +212,7 @@ app.get('/api/products', async (_req, res) => {
 });
 
 app.get('/api/admin/summary', requireAdmin, async (_req, res) => {
-  if (!pgPool && !supabase) return res.status(503).json({ ok: false, error: 'Database is not configured.' });
+  if (!hasDatabase()) return res.status(503).json({ ok: false, error: 'Database is not configured.' });
   const tables = ['intake_submissions', 'orders', 'invoices', 'payments', 'leads', 'outreach_messages'];
   const counts = {};
   try {
@@ -132,10 +226,126 @@ app.get('/api/admin/summary', requireAdmin, async (_req, res) => {
         counts[table] = count || 0;
       }
     }
-    return res.json({ ok: true, counts, generatedAt: new Date().toISOString() });
+    return res.json({ ok: true, counts, generatedAt: new Date().toISOString(), payment: { tronGridConfigured: tronGridProvider.configured, verifierConfigured: usdtVerifier.configured } });
   } catch (error) {
     console.error('admin summary failed', error);
     return res.status(500).json({ ok: false, error: 'Could not load admin summary.' });
+  }
+});
+
+app.get('/api/admin/orders', requireAdmin, async (req, res) => {
+  if (!pgPool) return res.status(503).json({ ok: false, error: 'Admin order review requires PostgreSQL.' });
+  const page = Math.max(1, Number.parseInt(req.query.page || '1', 10) || 1);
+  const limit = Math.min(50, Math.max(1, Number.parseInt(req.query.limit || '25', 10) || 25));
+  const offset = (page - 1) * limit;
+  const status = cleanText(req.query.status, 40);
+  try {
+    const result = await pgPool.query(`
+      select o.id, o.order_number, o.customer_email, o.customer_name, o.amount_usdt,
+             o.network, o.status, o.created_at, o.download_expires_at,
+             p.slug, i.invoice_number, i.status as invoice_status, i.expires_at,
+             latest.txid, latest.status as payment_status, latest.confirmations,
+             latest.amount_usdt as payment_amount_usdt, latest.updated_at as payment_updated_at
+      from public.orders o
+      join public.products p on p.id = o.product_id
+      join public.invoices i on i.order_id = o.id
+      left join lateral (
+        select txid, status, confirmations, amount_usdt, updated_at
+        from public.payments where invoice_id = i.id order by created_at desc limit 1
+      ) latest on true
+      where ($1 = '' or o.status = $1)
+      order by o.created_at desc limit $2 offset $3`, [status, limit, offset]);
+    return res.json({ ok: true, page, limit, orders: result.rows });
+  } catch (error) {
+    console.error('admin orders failed', error);
+    return res.status(500).json({ ok: false, error: 'Could not load orders.' });
+  }
+});
+
+app.post('/api/admin/orders/:id/recheck', requireAdmin, async (req, res) => {
+  if (!pgPool) return res.status(503).json({ ok: false, error: 'Payment recheck requires PostgreSQL.' });
+  const orderId = cleanText(req.params.id, 80);
+  let txid = cleanText(req.body.txid, 128);
+  try {
+    const orderResult = await pgPool.query('select id, order_number from public.orders where id = $1 limit 1', [orderId]);
+    if (!orderResult.rows[0]) return res.status(404).json({ ok: false, error: 'Order not found.' });
+    if (!txid) {
+      const paymentResult = await pgPool.query('select txid from public.payments p join public.invoices i on i.id = p.invoice_id where i.order_id = $1 order by p.created_at desc limit 1', [orderId]);
+      txid = paymentResult.rows[0]?.txid || '';
+    }
+    if (!txid) return res.status(400).json({ ok: false, error: 'A TxID is required for recheck.' });
+    await pgPool.query('insert into public.jobs (job_type, dedupe_key, payload, run_after) values ($1,$2,$3,now()) on conflict (dedupe_key) do update set status = \'queued\', run_after = now(), locked_at = null, updated_at = now()', ['payment_check', `payment_check:${orderId}:${txid}`, JSON.stringify({ orderId, txid })]);
+    await pgPool.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['admin', 'payment_recheck_queued', 'order', orderId, JSON.stringify({ txid })]);
+    return res.status(202).json({ ok: true, status: 'queued', orderId, txid });
+  } catch (error) {
+    console.error('admin recheck failed', error);
+    return res.status(500).json({ ok: false, error: 'Could not queue payment recheck.' });
+  }
+});
+
+app.post('/api/admin/orders/:id/approve', requireAdmin, async (req, res) => {
+  if (!pgPool) return res.status(503).json({ ok: false, error: 'Manual approval requires PostgreSQL.' });
+  const orderId = cleanText(req.params.id, 80);
+  const reason = cleanText(req.body.reason, 500);
+  if (reason.length < 10) return res.status(400).json({ ok: false, error: 'A detailed approval reason is required.' });
+  const client = await pgPool.connect();
+  try {
+    await client.query('begin');
+    const result = await client.query('select o.id, o.status, i.id as invoice_id from public.orders o join public.invoices i on i.order_id = o.id where o.id = $1 for update', [orderId]);
+    const order = result.rows[0];
+    if (!order) { await client.query('rollback'); return res.status(404).json({ ok: false, error: 'Order not found.' }); }
+    if (order.status === 'paid') { await client.query('rollback'); return res.status(409).json({ ok: false, error: 'Order is already paid.' }); }
+    const downloadToken = createDownloadToken();
+    const downloadTokenHash = hashDownloadToken(downloadToken);
+    const downloadExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+    await client.query('update public.orders set status = $1, download_token_hash = $2, download_expires_at = $3, updated_at = now() where id = $4', ['paid', downloadTokenHash, downloadExpiresAt, orderId]);
+    await client.query('update public.invoices set status = $1, updated_at = now() where id = $2', ['paid', order.invoice_id]);
+    await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['admin', 'manual_payment_approval', 'order', orderId, JSON.stringify({ reason, downloadExpiresAt })]);
+    await client.query('commit');
+    return res.json({ ok: true, status: 'paid', downloadUrl: `/api/download/${encodeURIComponent(downloadToken)}`, downloadExpiresAt });
+  } catch (error) {
+    await client.query('rollback');
+    console.error('admin approval failed', error);
+    return res.status(500).json({ ok: false, error: 'Could not approve order.' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/telegram/webhook', async (req, res) => {
+  const expectedSecret = cleanText(process.env.TELEGRAM_WEBHOOK_SECRET, 256);
+  const receivedSecret = cleanText(req.headers['x-telegram-bot-api-secret-token'], 256);
+  if (expectedSecret && receivedSecret !== expectedSecret) return res.status(401).json({ ok: false, error: 'Invalid webhook secret.' });
+  try {
+    const message = req.body?.message;
+    const chatId = message?.chat?.id;
+    const text = cleanText(message?.text, 400);
+    if (chatId && telegramBot.configured) {
+      if (text === '/start') {
+        await telegramBot.sendMessage({ chatId, text: '<b>Client Protection Kit</b>\n\nYou are subscribed to optional order updates. We will only send messages related to your request.' });
+      } else if (text === '/help') {
+        await telegramBot.sendMessage({ chatId, text: 'Use the store checkout to create an order. Payment verification is handled through the order page.' });
+      }
+      if (pgPool) await pgPool.query('insert into public.audit_logs (actor_type, actor_id, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5,$6)', ['customer', String(chatId), 'telegram_opt_in_event', 'telegram_chat', String(chatId), JSON.stringify({ command: text.startsWith('/') ? text : null })]);
+    }
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('telegram webhook failed', error);
+    return res.status(500).json({ ok: false, error: 'Webhook processing failed.' });
+  }
+});
+
+app.post('/api/admin/telegram/webhook', requireAdmin, async (req, res) => {
+  const publicBaseUrl = cleanText(req.body.publicBaseUrl || process.env.PUBLIC_BASE_URL, 300).replace(/\/$/, '');
+  const secretToken = cleanText(process.env.TELEGRAM_WEBHOOK_SECRET, 256);
+  if (!telegramBot.configured) return res.status(503).json({ ok: false, error: 'Telegram bot is not configured.' });
+  if (!publicBaseUrl || !secretToken) return res.status(400).json({ ok: false, error: 'PUBLIC_BASE_URL and TELEGRAM_WEBHOOK_SECRET are required.' });
+  try {
+    const result = await telegramBot.setWebhook({ url: `${publicBaseUrl}/api/telegram/webhook`, secretToken });
+    return res.json({ ok: true, webhook: result });
+  } catch (error) {
+    console.error('telegram webhook setup failed', error);
+    return res.status(502).json({ ok: false, error: 'Could not configure Telegram webhook.' });
   }
 });
 
@@ -144,26 +354,20 @@ app.post('/api/orders', async (req, res) => {
   const customerEmail = cleanText(req.body.email, 180).toLowerCase();
   const customerName = cleanText(req.body.name, 120);
   const staticProduct = products.find((item) => item.slug === productSlug);
+  if (!staticProduct || !isEmail(customerEmail)) return res.status(400).json({ ok: false, error: 'Choose a valid product and enter a valid email.' });
 
-  if (!staticProduct || !isEmail(customerEmail)) {
-    return res.status(400).json({ ok: false, error: 'Choose a valid product and enter a valid email.' });
-  }
-
-  const network = cleanText(process.env.USDT_NETWORK, 30) || 'TRC20';
-  const receivingAddress = cleanText(process.env.USDT_RECEIVING_ADDRESS, 128);
-  if (!receivingAddress) {
-    return res.status(503).json({ ok: false, code: 'PAYMENT_SETUP_REQUIRED', error: 'USDT checkout is not configured yet.' });
+  const config = paymentConfig();
+  if (!config.receivingAddress) return res.status(503).json({ ok: false, code: 'PAYMENT_SETUP_REQUIRED', error: 'USDT checkout is not configured yet.' });
+  if (!hasDatabase()) {
+    return res.status(503).json({ ok: false, code: 'DATABASE_REQUIRED', error: 'Checkout is temporarily unavailable.' });
   }
 
   const orderNumber = `CPK-${Date.now().toString(36).toUpperCase()}`;
   const invoiceNumber = `INV-${Date.now().toString(36).toUpperCase()}`;
+  const statusToken = createDownloadToken();
+  const statusTokenHash = hashDownloadToken(statusToken);
   const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
   const amountUsdt = staticProduct.priceUsdt;
-
-  if (!pgPool && !supabase) {
-    return res.status(202).json({ ok: true, stored: false, order: { orderNumber, invoiceNumber, product: staticProduct.slug, amountUsdt, network, receivingAddress, expiresAt, status: 'awaiting_payment' } });
-  }
-
   try {
     if (pgPool) {
       const client = await pgPool.connect();
@@ -172,8 +376,9 @@ app.post('/api/orders', async (req, res) => {
         const productResult = await client.query('select id, slug, price_usdt from public.products where slug = $1 and active = true limit 1', [staticProduct.slug]);
         const dbProduct = productResult.rows[0];
         if (!dbProduct) throw new Error('The selected product is not available.');
-        const orderResult = await client.query('insert into public.orders (order_number, product_id, customer_email, customer_name, amount_usdt, network, receiving_address, status) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id', [orderNumber, dbProduct.id, customerEmail, customerName || null, amountUsdt, network, receivingAddress, 'awaiting_payment']);
-        await client.query('insert into public.invoices (order_id, invoice_number, amount_usdt, network, receiving_address, expires_at, status) values ($1,$2,$3,$4,$5,$6,$7)', [orderResult.rows[0].id, invoiceNumber, amountUsdt, network, receivingAddress, expiresAt, 'open']);
+        const orderResult = await client.query('insert into public.orders (order_number, product_id, customer_email, customer_name, amount_usdt, network, receiving_address, status, access_token_hash) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id', [orderNumber, dbProduct.id, customerEmail, customerName || null, amountUsdt, config.network, config.receivingAddress, 'awaiting_payment', statusTokenHash]);
+        await client.query('insert into public.invoices (order_id, invoice_number, amount_usdt, network, receiving_address, expires_at, status) values ($1,$2,$3,$4,$5,$6,$7)', [orderResult.rows[0].id, invoiceNumber, amountUsdt, config.network, config.receivingAddress, expiresAt, 'open']);
+        await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['customer', 'order_created', 'order', orderResult.rows[0].id, JSON.stringify({ orderNumber, product: staticProduct.slug })]);
         await client.query('commit');
       } catch (error) {
         await client.query('rollback');
@@ -184,21 +389,104 @@ app.post('/api/orders', async (req, res) => {
     } else {
       const dbProduct = await getProductBySlug(staticProduct.slug);
       if (!dbProduct) return res.status(500).json({ ok: false, error: 'The selected product is not available.' });
-      const { data: order, error: orderError } = await supabase.from('orders').insert({ order_number: orderNumber, product_id: dbProduct.id, customer_email: customerEmail, customer_name: customerName || null, amount_usdt: amountUsdt, network, receiving_address: receivingAddress, status: 'awaiting_payment' }).select('id').single();
+      const { data: order, error: orderError } = await supabase.from('orders').insert({ order_number: orderNumber, product_id: dbProduct.id, customer_email: customerEmail, customer_name: customerName || null, amount_usdt: amountUsdt, network: config.network, receiving_address: config.receivingAddress, status: 'awaiting_payment', access_token_hash: statusTokenHash }).select('id').single();
       if (orderError) throw orderError;
-      const { error: invoiceError } = await supabase.from('invoices').insert({ order_id: order.id, invoice_number: invoiceNumber, amount_usdt: amountUsdt, network, receiving_address: receivingAddress, expires_at: expiresAt, status: 'open' });
+      const { error: invoiceError } = await supabase.from('invoices').insert({ order_id: order.id, invoice_number: invoiceNumber, amount_usdt: amountUsdt, network: config.network, receiving_address: config.receivingAddress, expires_at: expiresAt, status: 'open' });
       if (invoiceError) throw invoiceError;
     }
-    return res.status(201).json({ ok: true, stored: true, order: { orderNumber, invoiceNumber, product: staticProduct.slug, amountUsdt, network, receivingAddress, expiresAt, status: 'awaiting_payment' } });
+    return res.status(201).json({ ok: true, stored: true, order: publicOrder({ orderNumber, invoiceNumber, product: staticProduct.slug, amountUsdt, network: config.network, receivingAddress: config.receivingAddress, expiresAt, status: 'awaiting_payment', invoiceStatus: 'open' }, { statusToken }) });
   } catch (error) {
     console.error('order creation failed', error);
     return res.status(500).json({ ok: false, error: 'The order could not be created.' });
   }
 });
 
+app.get('/api/orders/:orderNumber/status', async (req, res) => {
+  const orderNumber = cleanText(req.params.orderNumber, 80);
+  const statusToken = cleanText(req.query.token, 128);
+  if (!orderNumber || !statusToken || !hasDatabase()) return res.status(404).json({ ok: false, error: 'Order status not found.' });
+  try {
+    const row = await getOrderByAccessToken(orderNumber, statusToken);
+    if (!row) return res.status(404).json({ ok: false, error: 'Order status not found.' });
+    return res.json({ ok: true, order: publicOrder(normalizeOrder(row)) });
+  } catch (error) {
+    console.error('order status failed', error);
+    return res.status(500).json({ ok: false, error: 'Could not load order status.' });
+  }
+});
+
+app.post('/api/orders/:orderNumber/payment', async (req, res) => {
+  const orderNumber = cleanText(req.params.orderNumber, 80);
+  const statusToken = cleanText(req.body.statusToken, 128);
+  const txid = cleanText(req.body.txid, 128);
+  if (!orderNumber || !statusToken || !txid || !hasDatabase()) return res.status(400).json({ ok: false, error: 'Order access token and TxID are required.' });
+  try {
+    const orderRow = await getOrderByAccessToken(orderNumber, statusToken);
+    if (!orderRow) return res.status(404).json({ ok: false, error: 'Order not found.' });
+    const order = normalizeOrder(orderRow);
+    if (order.status === 'paid') return res.json({ ok: true, status: 'confirmed', message: 'This order is already paid. Use the original download link if you received one.' });
+    if (order.status === 'expired' || new Date(order.expiresAt).getTime() <= Date.now()) return res.status(409).json({ ok: false, status: 'expired', error: 'This invoice has expired.' });
+    if (!usdtVerifier.configured) return res.status(503).json({ ok: false, status: 'manual_review', reason: 'provider_not_configured', error: 'Payment verification is not enabled yet.' });
+
+    const verification = await usdtVerifier.verify({ txid, invoice: { amountUsdt: order.amountUsdt, network: order.network, receivingAddress: order.receivingAddress } });
+    const transaction = verification.transaction || {};
+    const resultStatus = verification.status;
+    const paymentStatus = resultStatus === 'confirmed' ? 'confirmed' : resultStatus === 'confirming' ? 'confirming' : resultStatus === 'manual_review' ? 'manual_review' : 'rejected';
+
+    if (pgPool) {
+      const client = await pgPool.connect();
+      try {
+        await client.query('begin');
+        const locked = await client.query('select o.id, o.status, i.id as invoice_id from public.orders o join public.invoices i on i.order_id = o.id where o.id = $1 for update', [order.id]);
+        const current = locked.rows[0];
+        if (!current) throw new Error('Order disappeared during payment verification.');
+        if (current.status === 'paid') {
+          await client.query('commit');
+          return res.json({ ok: true, status: 'confirmed', message: 'This order is already paid.' });
+        }
+        const paymentInsert = await client.query(`insert into public.payments (invoice_id, txid, network, token_contract, from_address, to_address, amount_usdt, confirmations, status, provider, raw_reference, verified_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (txid) do nothing returning id`, [current.invoice_id, txid, transaction.network || order.network, transaction.tokenContract || '', transaction.fromAddress || null, transaction.toAddress || '', Number(transaction.amountUsdt || 0), Number(transaction.confirmations || 0), paymentStatus, 'trongrid', JSON.stringify(transaction.raw || transaction), resultStatus === 'confirmed' ? new Date().toISOString() : null]);
+        if (!paymentInsert.rows[0]) {
+          await client.query('rollback');
+          return res.status(409).json({ ok: false, status: 'rejected', reason: 'txid_already_used', error: 'This transaction ID has already been submitted.' });
+        }
+        if (resultStatus === 'confirmed') {
+          const downloadToken = createDownloadToken();
+          const downloadTokenHash = hashDownloadToken(downloadToken);
+          const downloadExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+          await client.query('update public.orders set status = $1, download_token_hash = $2, download_expires_at = $3, updated_at = now() where id = $4', ['paid', downloadTokenHash, downloadExpiresAt, order.id]);
+          await client.query('update public.invoices set status = $1, updated_at = now() where id = $2', ['paid', current.invoice_id]);
+          await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['integration', 'payment_confirmed', 'order', order.id, JSON.stringify({ txid, provider: 'trongrid', confirmations: transaction.confirmations })]);
+          await client.query('commit');
+          return res.json({ ok: true, status: 'confirmed', order: publicOrder({ ...order, status: 'paid', invoiceStatus: 'paid' }, { downloadToken }) });
+        }
+        const newOrderStatus = resultStatus === 'confirming' ? 'confirming' : resultStatus === 'manual_review' ? 'manual_review' : 'awaiting_payment';
+        const newInvoiceStatus = resultStatus === 'manual_review' ? 'manual_review' : 'open';
+        await client.query('update public.orders set status = $1, updated_at = now() where id = $2', [newOrderStatus, order.id]);
+        await client.query('update public.invoices set status = $1, updated_at = now() where id = $2', [newInvoiceStatus, current.invoice_id]);
+        if (resultStatus === 'confirming') await enqueueJob(client, 'payment_check', `payment_check:${order.id}:${txid}`, { orderId: order.id, txid });
+        await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['integration', `payment_${paymentStatus}`, 'order', order.id, JSON.stringify({ txid, provider: 'trongrid', confirmations: transaction.confirmations || 0, reason: verification.reason || null })]);
+        await client.query('commit');
+      } catch (error) {
+        await client.query('rollback');
+        if (error?.code === '23505') return res.status(409).json({ ok: false, status: 'rejected', reason: 'txid_already_used', error: 'This transaction ID has already been submitted.' });
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+    const message = resultStatus === 'confirming' ? 'Payment found. We are waiting for more confirmations.' : resultStatus === 'manual_review' ? 'Payment needs manual review.' : 'The transaction does not match this invoice.';
+    return res.status(resultStatus === 'confirming' ? 202 : resultStatus === 'manual_review' ? 202 : 422).json({ ok: resultStatus === 'confirming', status: resultStatus, reason: verification.reason, message, transaction: { confirmations: transaction.confirmations || 0 } });
+  } catch (error) {
+    const mapped = txidError(error);
+    if (mapped) return res.status(mapped.status).json(mapped.body);
+    console.error('payment verification failed', error);
+    return res.status(500).json({ ok: false, status: 'manual_review', error: 'Payment verification is temporarily unavailable.' });
+  }
+});
+
 app.get('/api/download/:token', async (req, res) => {
   const token = cleanText(req.params.token, 128);
-  if (!token || (!pgPool && !supabase)) return res.status(404).json({ ok: false, error: 'Download not available.' });
+  if (!token || !hasDatabase()) return res.status(404).json({ ok: false, error: 'Download not available.' });
   const tokenHash = hashDownloadToken(token);
   try {
     let order;
@@ -235,35 +523,12 @@ app.post('/api/intake', async (req, res) => {
   const budget = cleanText(req.body.budget, 80);
   const contactMethod = cleanText(req.body.contactMethod, 80);
   const consent = req.body.consent === true || req.body.consent === 'true';
-
-  if (!fullName || !isEmail(email) || !company || !businessType || !currentSituation || !desiredOutcome || !budget || !contactMethod || !consent) {
-    return res.status(400).json({ ok: false, error: 'Please complete the required fields and consent.' });
-  }
-
-  const submission = {
-    full_name: fullName,
-    email,
-    company,
-    business_type: businessType,
-    current_situation: currentSituation,
-    desired_outcome: desiredOutcome,
-    budget,
-    contact_method: contactMethod,
-    source: cleanText(req.body.source, 120) || 'website',
-    status: 'new'
-  };
-
-  if (!pgPool && !supabase) {
-    return res.status(202).json({ ok: true, stored: false, message: 'Submission accepted in demo mode.' });
-  }
-
+  if (!fullName || !isEmail(email) || !company || !businessType || !currentSituation || !desiredOutcome || !budget || !contactMethod || !consent) return res.status(400).json({ ok: false, error: 'Please complete the required fields and consent.' });
+  const submission = { full_name: fullName, email, company, business_type: businessType, current_situation: currentSituation, desired_outcome: desiredOutcome, budget, contact_method: contactMethod, source: cleanText(req.body.source, 120) || 'website', status: 'new' };
+  if (!hasDatabase()) return res.status(503).json({ ok: false, error: 'The sample form is temporarily unavailable.' });
   try {
-    if (pgPool) {
-      await pgPool.query('insert into public.intake_submissions (full_name, email, company, business_type, current_situation, desired_outcome, budget, contact_method, source, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [submission.full_name, submission.email, submission.company, submission.business_type, submission.current_situation, submission.desired_outcome, submission.budget, submission.contact_method, submission.source, submission.status]);
-    } else {
-      const { error } = await supabase.from('intake_submissions').insert(submission);
-      if (error) throw error;
-    }
+    if (pgPool) await pgPool.query('insert into public.intake_submissions (full_name, email, company, business_type, current_situation, desired_outcome, budget, contact_method, source, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [submission.full_name, submission.email, submission.company, submission.business_type, submission.current_situation, submission.desired_outcome, submission.budget, submission.contact_method, submission.source, submission.status]);
+    else { const { error } = await supabase.from('intake_submissions').insert(submission); if (error) throw error; }
     return res.status(201).json({ ok: true, stored: true, message: 'Submission received.' });
   } catch (error) {
     console.error('intake insert failed', error);
@@ -271,10 +536,6 @@ app.post('/api/intake', async (req, res) => {
   }
 });
 
-app.use((_req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+app.use((_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Server listening on port ${port}`);
-});
+app.listen(port, '0.0.0.0', () => console.log(`Server listening on port ${port}`));

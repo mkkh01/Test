@@ -2,57 +2,68 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Admin Summary — Client Protection Kit</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Client Protection Kit — Admin</title>
   <link rel="stylesheet" href="/styles.css">
   <style>
-    .admin-card { max-width: 720px; margin: 48px auto; }
-    .admin-form { display: flex; gap: 10px; margin-top: 18px; }
-    .admin-form input { flex: 1; padding: 12px; border: 1px solid #ced6e3; border-radius: 8px; font: inherit; }
-    .admin-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 22px; }
-    .admin-metric { padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
-    .admin-metric small { color: var(--muted); display: block; }
-    .admin-metric strong { font-size: 1.8rem; color: var(--navy); }
-    @media (max-width: 640px) { .admin-form, .admin-grid { grid-template-columns: 1fr; display: grid; } }
+    body { padding: 32px 0 60px; }
+    .admin-shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+    .admin-header { display:flex; justify-content:space-between; gap:20px; align-items:flex-end; margin-bottom:24px; }
+    .admin-card { background:#fff; border:1px solid var(--line); border-radius:15px; padding:22px; box-shadow:0 12px 28px rgba(20,33,61,.06); margin-bottom:18px; }
+    .admin-form { display:flex; gap:12px; flex-wrap:wrap; align-items:end; }
+    .admin-form label { display:grid; gap:6px; color:var(--navy); font-size:.78rem; font-weight:750; flex:1 1 360px; }
+    .admin-form input { padding:11px 12px; border:1px solid #ced6e3; border-radius:8px; font:inherit; }
+    .metrics { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; }
+    .metric { padding:14px; border-radius:11px; background:#f4f7fc; }
+    .metric b { display:block; color:var(--navy); font-size:1.5rem; }
+    .metric span { color:var(--muted); font-size:.76rem; }
+    .table-wrap { overflow:auto; }
+    table { width:100%; border-collapse:collapse; min-width:900px; }
+    th,td { padding:12px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:.8rem; }
+    th { color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; }
+    td strong { color:var(--navy); }
+    .status-pill { display:inline-block; padding:3px 7px; border-radius:99px; background:#edf2fa; color:var(--navy); font-size:.7rem; font-weight:800; }
+    .status-pill.paid { background:#e7f7f0; color:#095c43; }
+    .status-pill.manual_review { background:#fff1c7; color:#8a5200; }
+    .row-actions { display:flex; gap:7px; flex-wrap:wrap; }
+    .small-button { border:1px solid #bfcdf4; border-radius:7px; padding:6px 8px; background:#fff; color:var(--blue); cursor:pointer; font:inherit; font-size:.72rem; font-weight:750; }
+    .small-button:hover { background:#f1f5ff; }
+    .notice { min-height:22px; color:var(--muted); font-size:.84rem; }
+    @media (max-width:800px) { .metrics { grid-template-columns:repeat(3,1fr); } .admin-header { align-items:flex-start; flex-direction:column; } }
+    @media (max-width:500px) { .metrics { grid-template-columns:repeat(2,1fr); } }
   </style>
 </head>
 <body>
-  <main class="container">
-    <section class="hero"><h1>Admin Summary</h1><p>Private operational overview. Use only from a trusted device.</p></section>
-    <section class="card admin-card">
-      <h2>Authenticate</h2>
-      <p class="helper">Enter the Admin access token configured in the server environment. This page does not store it.</p>
-      <form id="adminForm" class="admin-form"><input id="adminToken" type="password" autocomplete="off" placeholder="Admin access token" required><button class="button primary" type="submit">Load summary</button></form>
-      <p id="status" class="form-status" role="status"></p>
-      <div id="metrics" class="admin-grid"></div>
+  <main class="admin-shell">
+    <header class="admin-header"><div><p class="eyebrow">Private workspace</p><h1 style="font-size:clamp(2rem,5vw,3.8rem);margin-bottom:10px;">Order review</h1><p style="color:var(--muted);margin:0;">Monitor invoices, verify payments, and release protected downloads.</p></div><a class="button ghost" href="/">Back to store</a></header>
+    <section class="admin-card"><form id="adminForm" class="admin-form"><label>Admin access token<input id="adminToken" type="password" autocomplete="current-password" required></label><button class="button primary" type="submit">Open dashboard</button></form><p id="adminStatus" class="notice" role="status"></p></section>
+    <section id="dashboard" class="hidden">
+      <section class="admin-card"><div id="metrics" class="metrics"></div></section>
+      <section class="admin-card"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;"><div><h2 style="margin:0;color:var(--navy);">Recent orders</h2><p class="notice" style="margin:5px 0 0;">TxID rechecks are queued for the payment worker. Manual approval requires a reason.</p></div><button id="refreshOrders" class="small-button" type="button">Refresh</button></div><p id="ordersStatus" class="notice"></p><div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>Status</th><th>Payment</th><th>Actions</th></tr></thead><tbody id="ordersBody"></tbody></table></div></section>
     </section>
   </main>
   <script>
-    const form = document.getElementById('adminForm');
-    const token = document.getElementById('adminToken');
-    const status = document.getElementById('status');
+    const adminForm = document.getElementById('adminForm');
+    const tokenInput = document.getElementById('adminToken');
+    const adminStatus = document.getElementById('adminStatus');
+    const dashboard = document.getElementById('dashboard');
     const metrics = document.getElementById('metrics');
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      status.textContent = 'Loading…';
-      metrics.replaceChildren();
-      try {
-        const response = await fetch('/api/admin/summary', { headers: { 'x-admin-token': token.value } });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Unable to load summary.');
-        for (const [label, value] of Object.entries(result.counts)) {
-          const card = document.createElement('div');
-          card.className = 'admin-metric';
-          card.innerHTML = `<small>${label.replaceAll('_', ' ')}</small><strong>${value}</strong>`;
-          metrics.append(card);
-        }
-        status.textContent = `Updated ${new Date(result.generatedAt).toLocaleString()}`;
-        status.style.color = '#0d8b65';
-      } catch (error) {
-        status.textContent = error.message;
-        status.style.color = '#b42318';
-      }
-    });
+    const ordersBody = document.getElementById('ordersBody');
+    const ordersStatus = document.getElementById('ordersStatus');
+    let token = '';
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
+    async function api(path, options = {}) { const response = await fetch(path, { ...options, headers: { ...(options.headers || {}), 'x-admin-token': token, 'content-type': 'application/json' } }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Request failed.'); return result; }
+    async function loadDashboard() {
+      adminStatus.textContent = 'Loading dashboard…';
+      const [summary, orders] = await Promise.all([api('/api/admin/summary'), api('/api/admin/orders?limit=50')]);
+      metrics.innerHTML = Object.entries(summary.counts).map(([key, value]) => `<div class="metric"><b>${escapeHtml(value)}</b><span>${escapeHtml(key.replaceAll('_',' '))}</span></div>`).join('');
+      ordersBody.innerHTML = orders.orders.map((order) => `<tr><td><strong>${escapeHtml(order.order_number)}</strong><br><small>${escapeHtml(order.invoice_number)}<br>${escapeHtml(order.slug)}</small></td><td>${escapeHtml(order.customer_name || '—')}<br><small>${escapeHtml(order.customer_email)}</small></td><td>${escapeHtml(order.amount_usdt)} USDT<br><small>${escapeHtml(order.network)}</small></td><td><span class="status-pill ${escapeHtml(order.status)}">${escapeHtml(order.status)}</span><br><small>${escapeHtml(order.invoice_status)}</small></td><td>${order.txid ? `<small>${escapeHtml(order.txid)}</small><br><small>${escapeHtml(order.payment_status)} · ${escapeHtml(order.confirmations ?? 0)} confirmations</small>` : '—'}</td><td><div class="row-actions"><button class="small-button" data-action="recheck" data-id="${escapeHtml(order.id)}">Recheck</button><button class="small-button" data-action="approve" data-id="${escapeHtml(order.id)}">Manual approve</button></div></td></tr>`).join('') || '<tr><td colspan="6">No orders yet.</td></tr>';
+      dashboard.classList.remove('hidden');
+      adminStatus.textContent = 'Dashboard unlocked for this session.';
+    }
+    adminForm.addEventListener('submit', async (event) => { event.preventDefault(); token = tokenInput.value.trim(); try { await loadDashboard(); } catch (error) { token = ''; adminStatus.textContent = error.message; } });
+    document.getElementById('refreshOrders').addEventListener('click', async () => { try { await loadDashboard(); } catch (error) { ordersStatus.textContent = error.message; } });
+    ordersBody.addEventListener('click', async (event) => { const button = event.target.closest('button[data-action]'); if (!button) return; const id = button.dataset.id; try { if (button.dataset.action === 'recheck') { const result = await api(`/api/admin/orders/${encodeURIComponent(id)}/recheck`, { method:'POST', body:'{}' }); ordersStatus.textContent = `Recheck queued for ${result.txid}.`; } else { const reason = window.prompt('Enter a detailed reason for manual approval:'); if (!reason) return; const result = await api(`/api/admin/orders/${encodeURIComponent(id)}/approve`, { method:'POST', body:JSON.stringify({ reason }) }); ordersStatus.textContent = `Order approved. Download URL: ${result.downloadUrl}`; } await loadDashboard(); } catch (error) { ordersStatus.textContent = error.message; } });
   </script>
 </body>
 </html>

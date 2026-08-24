@@ -18,7 +18,7 @@ export class UsdtVerifier {
   }
 
   get configured() {
-    return Boolean(this.network && this.receivingAddress && this.provider);
+    return Boolean(this.network && this.receivingAddress && this.tokenContract && this.provider);
   }
 
   validateInvoice({ amountUsdt, network, receivingAddress }) {
@@ -37,11 +37,20 @@ export class UsdtVerifier {
     if (!invoiceCheck.ok) return { ok: false, status: 'rejected', reason: invoiceCheck.reason };
     if (!this.configured) return { ok: false, status: 'manual_review', reason: 'provider_not_configured' };
 
-    const transaction = await this.provider.getTransaction(cleanTxid);
+    let transaction;
+    try {
+      transaction = await this.provider.getTransaction(cleanTxid);
+    } catch (error) {
+      if (error?.code === 'TX_NOT_FOUND') return { ok: false, status: 'rejected', reason: 'transaction_not_found' };
+      if (error?.code === 'INVALID_TXID') return { ok: false, status: 'rejected', reason: 'invalid_txid' };
+      if ([403, 429].includes(error?.status)) return { ok: false, status: 'manual_review', reason: 'provider_rate_limited' };
+      throw error;
+    }
     const amount = asNumber(transaction?.amountUsdt);
     const sameNetwork = normalize(transaction?.network) === this.network;
     const sameReceiver = normalize(transaction?.toAddress) === this.receivingAddress;
-    const sameContract = !this.tokenContract || normalize(transaction?.tokenContract) === this.tokenContract;
+    const sameContract = normalize(transaction?.tokenContract) === this.tokenContract;
+    if (transaction?.pending === true) return { ok: false, status: 'confirming', reason: 'transaction_pending', transaction };
     const successful = transaction?.success === true;
     const enoughConfirmations = Number(transaction?.confirmations || 0) >= Number(process.env.USDT_MIN_CONFIRMATIONS || 1);
     const exactAmount = amount !== null && amount >= invoiceCheck.amount;
