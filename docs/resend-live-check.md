@@ -15,3 +15,5 @@ The Render Environment page is now in edit mode. Existing `EMAIL_FROM` and `EMAI
 The new Render row now contains `EMAIL_TEST_TO=memo2026186@gmail.com`. The form is still in edit mode; the save/rebuild/deploy action has not yet been submitted in this checkpoint.
 
 After Render redeployed with `EMAIL_TEST_TO=memo2026186@gmail.com`, live health reported `emailConfigured=true`. One internal sample request was submitted to `/api/intake` with `contactMethod=Email` and explicit consent. The service returned HTTP 201 with `stored=true` and `emailStatus=sent`, meaning the application accepted the request and Resend API call succeeded. No outreach or additional recipient was used. Inbox placement itself should be confirmed in Gmail and in the Resend dashboard Logs.
+
+A corrected sample request was sent once on 2026-08-24 to `memo2026186@gmail.com` after health reported `emailConfigured=true` and `/preview` returned HTTP 200. The application returned HTTP 201 with `emailStatus=sent`. The corrected email uses the `/preview` URL and includes a visible copyable URL. No other recipient was used.
