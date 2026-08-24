@@ -4,6 +4,8 @@ import morgan from 'morgan';
 import { createClient } from '@supabase/supabase-js';
 import pg from 'pg';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createDownloadToken, hashDownloadToken, isTokenExpired } from './src/delivery/download-token.js';
 import { productBundles } from './src/delivery/product-manifest.js';
@@ -74,6 +76,33 @@ function isEmail(value) {
 
 function hasDatabase() {
   return Boolean(pgPool || supabase);
+}
+
+function cronAuthorized(req) {
+  const expected = process.env.CRON_TRIGGER_SECRET?.trim() || '';
+  const authorization = req.get('authorization') || '';
+  const provided = req.get('x-cron-secret') || (authorization.startsWith('Bearer ') ? authorization.slice(7) : '');
+  if (!expected || !provided) return false;
+  const expectedBuffer = Buffer.from(expected);
+  const providedBuffer = Buffer.from(provided);
+  return expectedBuffer.length === providedBuffer.length && timingSafeEqual(expectedBuffer, providedBuffer);
+}
+
+let cronRunning = false;
+
+function runCronChild() {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(__dirname, 'src/workers/cron-runner.js')], {
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout = `${stdout}${chunk}`.slice(-8000); });
+    child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-4000); });
+    child.on('error', (error) => resolve({ code: 1, stdout, stderr: String(error.message).slice(0, 1000) }));
+    child.on('close', (code) => resolve({ code: Number.isInteger(code) ? code : 1, stdout, stderr }));
+  });
 }
 
 function paymentConfig() {
@@ -225,6 +254,7 @@ app.get('/api/health', (_req, res) => {
     geminiKeyCount: geminiRouter.keys.length,
     solanaRpcConfigured: solanaRpcProvider.configured,
     usdtConfigured: usdtVerifier.configured,
+    cronTriggerConfigured: Boolean(process.env.CRON_TRIGGER_SECRET?.trim()),
     usdtMinConfirmations: paymentConfig().minConfirmations
   });
 });
@@ -726,5 +756,21 @@ app.post('/api/intake', rateLimit('intake-submit', 6, 60 * 60 * 1000), async (re
 });
 
 app.use((_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
+const handleCronTrigger = async (req, res) => {
+  if (!cronAuthorized(req)) return res.status(401).json({ ok: false, error: 'Unauthorized cron trigger.' });
+  if (cronRunning) return res.status(409).json({ ok: false, status: 'already_running' });
+  cronRunning = true;
+  res.status(202).json({ ok: true, status: 'started', message: 'Cron cycle started. Check service logs for its summary.' });
+  try {
+    const result = await runCronChild();
+    console.log(JSON.stringify({ worker: 'cron-trigger', exitCode: result.code, stdout: result.stdout, stderr: result.stderr }));
+  } finally {
+    cronRunning = false;
+  }
+};
+
+app.post('/api/internal/cron/run', handleCronTrigger);
+app.get('/api/internal/cron/run', handleCronTrigger);
 
 app.listen(port, '0.0.0.0', () => console.log(`Server listening on port ${port}`));

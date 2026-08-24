@@ -14,6 +14,19 @@ For continuous queue processing, create a Render Background Worker with command 
 
 The web service and worker/cron must share `DATABASE_URL`, `DB_POOL_MAX`, `SOLANA_RPC_URL`, `SOLANA_COMMITMENT`, `USDT_NETWORK`, `USDT_RECEIVING_ADDRESS`, `SOLANA_USDT_MINT`, `USDT_TOKEN_CONTRACT`, `USDT_TOKEN_DECIMALS`, `USDT_MIN_CONFIRMATIONS`, `GEMINI_MODEL`, `GEMINI_API_KEY_1..5`, `GEMINI_API_KEY_COUNT`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_WEBHOOK_SECRET`. Secrets must be entered in Render, not committed to GitHub.
 
+## Hourly external Cron trigger
+
+If the Render Web Service is the only deployed service, an external cron provider can call the protected endpoint once per hour:
+
+```text
+POST https://test-p2h3.onrender.com/api/internal/cron/run
+Authorization: Bearer <CRON_TRIGGER_SECRET>
+```
+
+The service returns `202` immediately, starts one child process, and logs the discovery, analysis, and payment summary. If a previous cycle is still running, it returns `409` and the cron provider should record the run as already in progress rather than retrying aggressively. The secret must be created by the owner, entered in Render as `CRON_TRIGGER_SECRET`, and entered in the cron provider's Authorization header; it must never be placed in the URL or committed to GitHub. The endpoint supports GET for providers that cannot issue POST, but POST is preferred.
+
+The hourly cycle discovers public Hacker News and Bluesky candidates first, then analyzes newly queued candidates with Gemini, and finally processes payment jobs. It creates drafts only; there is no outbound message step.
+
 ## Safety
 
 The worker uses database locking and dedupe keys. It must not be configured to rotate provider keys to bypass limits, scrape private platforms, or send bulk messages. All first-contact drafts remain `needs_human_review=true` and `approval_required=true`.

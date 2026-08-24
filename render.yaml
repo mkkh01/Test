@@ -23,6 +23,8 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+      - key: CRON_TRIGGER_SECRET
+        sync: false
       - key: PUBLIC_BASE_URL
         value: https://test-p2h3.onrender.com
       - key: GEMINI_API_KEY_COUNT
