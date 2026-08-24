@@ -243,6 +243,7 @@ app.use(express.json({ limit: '320kb' }));
 app.use(express.urlencoded({ extended: true, limit: '320kb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/preview', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'preview.html')));
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -757,7 +758,7 @@ app.post('/api/intake', rateLimit('intake-submit', 6, 60 * 60 * 1000), async (re
     if (wantsEmail && resendProvider.configured && allowedInCurrentMode) {
       try {
         const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://test-p2h3.onrender.com').replace(/\/$/, '');
-        await resendProvider.sendSampleEmail({ to: submission.email, fullName: submission.full_name, issue: submission.business_type, previewUrl: `${baseUrl}/preview.html` });
+        await resendProvider.sendSampleEmail({ to: submission.email, fullName: submission.full_name, issue: submission.business_type, previewUrl: `${baseUrl}/preview` });
         emailStatus = 'sent';
       } catch (error) {
         emailStatus = 'failed';
