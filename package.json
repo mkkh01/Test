@@ -14,7 +14,7 @@
     "worker:cron": "node src/workers/cron-runner.js",
     "db:check": "node scripts/check-db.js",
     "check": "node --check server.js && node --check src/integrations/gemini-router.js && node --check src/integrations/telegram-bot.js && node --check src/integrations/usdt-verifier.js && node --check src/integrations/trongrid-provider.js && node --check src/discovery/public-sources.js && node --check src/delivery/download-token.js && node --check src/workers/discovery-worker.js && node --check src/workers/lead-analysis-worker.js && node --check src/workers/payment-worker.js && node --check src/workers/worker-runner.js && node --check src/workers/cron-runner.js",
-    "test": "node --test test/core.test.js"
+    "test": "node --test test/core.test.js test/payment-simulation.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
