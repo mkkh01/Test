@@ -13,6 +13,10 @@ const paymentExpiry = document.getElementById('paymentExpiry');
 const txidForm = document.getElementById('txidForm');
 const paymentTxid = document.getElementById('paymentTxid');
 const paymentStatus = document.getElementById('paymentStatus');
+const evidenceForm = document.getElementById('evidenceForm');
+const paymentTransferText = document.getElementById('paymentTransferText');
+const paymentScreenshot = document.getElementById('paymentScreenshot');
+const evidenceStatus = document.getElementById('evidenceStatus');
 const downloadPanel = document.getElementById('downloadPanel');
 const downloadMessage = document.getElementById('downloadMessage');
 const downloadLink = document.getElementById('downloadLink');
@@ -25,6 +29,7 @@ const productLabels = {
 };
 
 let activeOrder = null;
+let statusPollTimer = null;
 
 function setStatus(element, text, color = '#687386') {
   if (!element) return;
@@ -40,8 +45,56 @@ function renderPaymentInstructions(order) {
   if (paymentNetwork) paymentNetwork.textContent = order.network;
   if (paymentAddress) paymentAddress.value = order.receivingAddress;
   if (paymentExpiry) paymentExpiry.textContent = `Invoice expires: ${new Date(order.expiresAt).toLocaleString()}`;
+  evidenceForm?.classList.add('hidden');
+  evidenceForm?.reset();
+  setStatus(evidenceStatus, '');
   setStatus(paymentStatus, 'After sending the exact amount, paste the TRON TxID below.', '#687386');
   paymentPanel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  startOrderStatusPolling();
+}
+
+function startOrderStatusPolling() {
+  if (statusPollTimer) clearTimeout(statusPollTimer);
+  if (!activeOrder?.statusUrl) return;
+  let checks = 0;
+  const check = async () => {
+    try {
+      const response = await fetch(activeOrder.statusUrl);
+      const result = await response.json();
+      if (result.order) {
+        activeOrder = { ...activeOrder, ...result.order };
+        if (result.order.status === 'paid' && result.order.downloadUrl) { renderDownload(result.order); return; }
+        if (result.order.status === 'manual_review') setStatus(paymentStatus, 'Your payment evidence is under manual review. We will release the kit after the blockchain details are confirmed.', '#b26a00');
+      }
+    } catch (_error) {
+      // A later check will retry; the customer can still use the visible form.
+    }
+    checks += 1;
+    if (checks < 120) statusPollTimer = setTimeout(check, 15000);
+  };
+  check();
+}
+
+async function fileToDataUrl(file) {
+  if (!file) return '';
+  if (file.size <= 120 * 1024) return await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = reject; reader.readAsDataURL(file); });
+  const bitmap = await createImageBitmap(file);
+  const maxWidth = 1400;
+  const scale = Math.min(1, maxWidth / bitmap.width);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return canvas.toDataURL('image/jpeg', 0.7);
+}
+
+function showEvidencePanel(result = {}) {
+  if (!evidenceForm) return;
+  if (activeOrder?.orderNumber) activeOrder = { ...activeOrder, ...result, submitEvidenceUrl: result.submitEvidenceUrl || `/api/orders/${encodeURIComponent(activeOrder.orderNumber)}/payment-evidence` };
+  evidenceForm.classList.remove('hidden');
+  setStatus(evidenceStatus, 'You can now submit the transfer details or a screenshot for manual review.', '#b26a00');
+  evidenceForm.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 function renderDownload(order) {
@@ -102,10 +155,35 @@ txidForm?.addEventListener('submit', async (event) => {
       renderDownload(result.order);
       return;
     }
+    if (result.paymentEvidenceRequested) showEvidencePanel(result);
     if (!response.ok && result.status !== 'confirming') throw new Error(result.error || result.message || 'The payment could not be verified.');
     setStatus(paymentStatus, result.message || 'Payment found. We are waiting for more confirmations.', '#b26a00');
   } catch (error) {
     setStatus(paymentStatus, error.message, '#b42318');
+  }
+});
+
+evidenceForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!activeOrder?.statusToken || !activeOrder.submitEvidenceUrl) {
+    setStatus(evidenceStatus, 'Submit two unsuccessful TxID checks first.', '#b42318');
+    return;
+  }
+  setStatus(evidenceStatus, 'Submitting your evidence securely…');
+  try {
+    const screenshot = await fileToDataUrl(paymentScreenshot?.files?.[0]);
+    const response = await fetch(activeOrder.submitEvidenceUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ statusToken: activeOrder.statusToken, transferText: paymentTransferText?.value.trim() || '', screenshotDataUrl: screenshot })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Unable to submit the evidence.');
+    setStatus(evidenceStatus, result.message || 'Evidence received. We will review it before releasing the kit.', '#0d8b65');
+    evidenceForm.querySelector('button[type="submit"]')?.setAttribute('disabled', 'disabled');
+    startOrderStatusPolling();
+  } catch (error) {
+    setStatus(evidenceStatus, error.message, '#b42318');
   }
 });
 

@@ -18,6 +18,8 @@
 
 يجب أن تكون عملية اعتماد الدفع ذرّية داخل PostgreSQL. يُقفل الطلب والفاتورة، ويُتحقق من عدم وجود TxID سابق، ثم تُحفظ نتيجة الدفع ويُحدّث الطلب والفاتورة في معاملة واحدة. لا يجوز أن يصبح الطلب `paid` اعتمادًا على وجود TxID وحده.
 
+إذا فشل التحقق من TxID مرتين بسبب عدم العثور على المعاملة أو عدم تطابقها مع الفاتورة، يزيد `payment_failed_attempts` ويظهر للعميل نموذج مساعدة. يمكنه إرسال TxID أو نص تفاصيل التحويل أو Screenshot صغيرة. يُحفظ الدليل في جدول خاص ولا يُعتمد تلقائيًا؛ يراجع المشرف المعاملة على TRON، ويقارن الشبكة والعقد والمبلغ والتأكيدات والعنوان مع العنوان الحالي في Render، ثم يستخدم الاعتماد اليدوي المسجل في `audit_logs` فقط إذا تطابقت الأدلة. الـScreenshot دليل مساعد وليست إثباتًا وحيدًا.
+
 ## قواعد TronGrid
 
 ينشئ التطبيق `TronGridProvider` server-side فقط. يستعمل `TRONGRID_BASE_URL=https://api.trongrid.io` و`TRONGRID_API_KEY` من متغيرات البيئة، ويرسل المفتاح في ترويسة `TRON-PRO-API-KEY`. يجب أن يستخدم استعلام جسم المعاملة وإيصال التنفيذ معًا، أو سجل TRC20 المفهرس عند الحاجة، ثم يعيد كائنًا موحدًا إلى `UsdtVerifier`.
@@ -47,11 +49,13 @@
 |---|---|---|
 | `POST /api/orders` | إنشاء طلب وفاتورة | تحقق صارم من المنتج والبريد ومعدل الطلب |
 | `GET /api/orders/:orderNumber` | عرض حالة الفاتورة للعميل | لا يعرض بيانات حساسة؛ يحتاج رابط حالة موقّع |
-| `POST /api/orders/:orderNumber/payment` | تقديم TxID | يقبل TxID فقط مع رمز حالة موقّع أو سر طلب |
+| `POST /api/orders/:orderNumber/payment` | تقديم TxID | يقبل TxID فقط مع رمز حالة موقّع أو سر طلب، ويطلب دليلًا بعد فشلين |
+| `POST /api/orders/:orderNumber/payment-evidence` | إرسال TxID أو نص التحويل أو Screenshot | رمز حالة موقّع، متاح بعد فشلين، تخزين خاص ومراجعة بشرية |
 | `GET /api/download/:token` | تنزيل الحزمة | رمز hashed، منتهي، والطلب `paid` فقط |
 | `GET /api/health` | فحص الخدمة | عام، بلا أسرار |
 | `GET /api/admin/summary` | إحصاءات الإدارة | `ADMIN_ACCESS_TOKEN` |
 | `GET /api/admin/orders` | قائمة مراجعة الطلبات والمدفوعات | `ADMIN_ACCESS_TOKEN`، pagination |
+| `GET /api/admin/orders/:id/evidence` | عرض آخر دليل خاص ومقارنة عنوان Render | `ADMIN_ACCESS_TOKEN` |
 | `POST /api/admin/orders/:id/recheck` | إعادة فحص يدوي | `ADMIN_ACCESS_TOKEN`، idempotent |
 | `POST /api/admin/orders/:id/approve` | اعتماد يدوي استثنائي | `ADMIN_ACCESS_TOKEN`، audit log إلزامي |
 

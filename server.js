@@ -100,6 +100,11 @@ function publicOrder(order, { statusToken, downloadToken } = {}) {
     submitTxidUrl: statusToken ? `/api/orders/${encodeURIComponent(order.orderNumber)}/payment` : undefined
   };
   if (statusToken) result.statusToken = statusToken;
+  if (order.paymentFailedAttempts !== undefined) result.paymentFailedAttempts = Number(order.paymentFailedAttempts || 0);
+  if (order.paymentEvidenceRequested) {
+    result.paymentEvidenceRequested = true;
+    if (statusToken) result.submitEvidenceUrl = `/api/orders/${encodeURIComponent(order.orderNumber)}/payment-evidence`;
+  }
   if (downloadToken) result.downloadUrl = `/api/download/${encodeURIComponent(downloadToken)}`;
   return result;
 }
@@ -122,7 +127,7 @@ async function getOrderByAccessToken(orderNumber, statusToken) {
   if (pgPool) {
     const result = await pgPool.query(`
       select o.id, o.order_number, o.customer_email, o.customer_name, o.amount_usdt, o.network,
-             o.receiving_address, o.status, o.download_expires_at, p.slug,
+             o.receiving_address, o.status, o.payment_failed_attempts, o.payment_evidence_requested_at, o.download_expires_at, p.slug,
              i.invoice_number, i.status as invoice_status, i.expires_at
       from public.orders o
       join public.products p on p.id = o.product_id
@@ -132,7 +137,7 @@ async function getOrderByAccessToken(orderNumber, statusToken) {
     return result.rows[0] || null;
   }
   if (supabase) {
-    const { data, error } = await supabase.from('orders').select('id,order_number,customer_email,customer_name,amount_usdt,network,receiving_address,status,download_expires_at,product_id,access_token_hash').eq('order_number', orderNumber).eq('access_token_hash', tokenHash).limit(1).maybeSingle();
+    const { data, error } = await supabase.from('orders').select('id,order_number,customer_email,customer_name,amount_usdt,network,receiving_address,status,payment_failed_attempts,payment_evidence_requested_at,download_expires_at,product_id,access_token_hash').eq('order_number', orderNumber).eq('access_token_hash', tokenHash).limit(1).maybeSingle();
     if (error) throw error;
     if (!data) return null;
     const { data: product, error: productError } = await supabase.from('products').select('slug').eq('id', data.product_id).limit(1).maybeSingle();
@@ -154,6 +159,8 @@ function normalizeOrder(row) {
     network: row.network,
     receivingAddress: row.receiving_address,
     status: row.status,
+    paymentFailedAttempts: Number(row.payment_failed_attempts || 0),
+    paymentEvidenceRequested: Boolean(row.payment_evidence_requested_at),
     invoiceStatus: row.invoice_status,
     expiresAt: row.expires_at,
     downloadExpiresAt: row.download_expires_at
@@ -171,10 +178,38 @@ function txidError(error) {
   return null;
 }
 
+async function recordFailedPaymentAttempt(orderNumber, statusToken, reason) {
+  if (!pgPool) return null;
+  const row = await getOrderByAccessToken(orderNumber, statusToken);
+  if (!row || ['paid', 'cancelled'].includes(row.status)) return null;
+  const client = await pgPool.connect();
+  try {
+    await client.query('begin');
+    const result = await client.query(`
+      update public.orders
+      set payment_failed_attempts = payment_failed_attempts + 1,
+          payment_evidence_requested_at = case when payment_failed_attempts + 1 >= 2 then coalesce(payment_evidence_requested_at, now()) else payment_evidence_requested_at end,
+          updated_at = now()
+      where id = $1
+      returning payment_failed_attempts, payment_evidence_requested_at`, [row.id]);
+    const updated = result.rows[0];
+    if (updated) {
+      await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['customer', 'payment_failed_attempt', 'order', row.id, JSON.stringify({ reason, attempts: updated.payment_failed_attempts })]);
+    }
+    await client.query('commit');
+    return updated || null;
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.json({ limit: '256kb' }));
-app.use(express.urlencoded({ extended: true, limit: '256kb' }));
+app.use(express.json({ limit: '320kb' }));
+app.use(express.urlencoded({ extended: true, limit: '320kb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -243,10 +278,11 @@ app.get('/api/admin/orders', requireAdmin, async (req, res) => {
   try {
     const result = await pgPool.query(`
       select o.id, o.order_number, o.customer_email, o.customer_name, o.amount_usdt,
-             o.network, o.status, o.created_at, o.download_expires_at,
+             o.network, o.status, o.payment_failed_attempts, o.payment_evidence_requested_at, o.created_at, o.download_expires_at,
              p.slug, i.invoice_number, i.status as invoice_status, i.expires_at,
              latest.txid, latest.status as payment_status, latest.confirmations,
-             latest.amount_usdt as payment_amount_usdt, latest.updated_at as payment_updated_at
+             latest.amount_usdt as payment_amount_usdt, latest.updated_at as payment_updated_at,
+             evidence.status as evidence_status, evidence.created_at as evidence_created_at
       from public.orders o
       join public.products p on p.id = o.product_id
       join public.invoices i on i.order_id = o.id
@@ -254,12 +290,68 @@ app.get('/api/admin/orders', requireAdmin, async (req, res) => {
         select txid, status, confirmations, amount_usdt, updated_at
         from public.payments where invoice_id = i.id order by created_at desc limit 1
       ) latest on true
+      left join lateral (
+        select status, created_at
+        from public.payment_evidence where order_id = o.id order by created_at desc limit 1
+      ) evidence on true
       where ($1 = '' or o.status = $1)
       order by o.created_at desc limit $2 offset $3`, [status, limit, offset]);
     return res.json({ ok: true, page, limit, orders: result.rows });
   } catch (error) {
     console.error('admin orders failed', error);
     return res.status(500).json({ ok: false, error: 'Could not load orders.' });
+  }
+});
+
+app.get('/api/admin/orders/:id/evidence', requireAdmin, async (req, res) => {
+  if (!pgPool) return res.status(503).json({ ok: false, error: 'Evidence review requires PostgreSQL.' });
+  const orderId = cleanText(req.params.id, 80);
+  try {
+    const orderResult = await pgPool.query(`
+      select o.id, o.order_number, o.customer_email, o.amount_usdt, o.network,
+             o.receiving_address as invoice_receiving_address,
+             p.slug,
+             e.id as evidence_id, e.txid, e.transfer_text, e.screenshot_data_url,
+             e.screenshot_mime_type, e.status as evidence_status, e.reviewed_at,
+             e.reviewer_id, e.review_notes, e.created_at as evidence_created_at
+      from public.orders o
+      join public.products p on p.id = o.product_id
+      left join lateral (
+        select * from public.payment_evidence where order_id = o.id order by created_at desc limit 1
+      ) e on true
+      where o.id = $1
+      limit 1`, [orderId]);
+    const order = orderResult.rows[0];
+    if (!order) return res.status(404).json({ ok: false, error: 'Order not found.' });
+    return res.json({
+      ok: true,
+      order: {
+        id: order.id,
+        orderNumber: order.order_number,
+        customerEmail: order.customer_email,
+        amountUsdt: Number(order.amount_usdt),
+        network: order.network,
+        product: order.slug,
+        invoiceReceivingAddress: order.invoice_receiving_address,
+        configuredReceivingAddress: paymentConfig().receivingAddress,
+        runtimeAddressMatchesInvoice: order.invoice_receiving_address === paymentConfig().receivingAddress
+      },
+      evidence: order.evidence_id ? {
+        id: order.evidence_id,
+        txid: order.txid,
+        transferText: order.transfer_text,
+        screenshotDataUrl: order.screenshot_data_url,
+        screenshotMimeType: order.screenshot_mime_type,
+        status: order.evidence_status,
+        reviewedAt: order.reviewed_at,
+        reviewerId: order.reviewer_id,
+        reviewNotes: order.review_notes,
+        createdAt: order.evidence_created_at
+      } : null
+    });
+  } catch (error) {
+    console.error('admin evidence load failed', error);
+    return res.status(500).json({ ok: false, error: 'Could not load payment evidence.' });
   }
 });
 
@@ -301,6 +393,7 @@ app.post('/api/admin/orders/:id/approve', requireAdmin, async (req, res) => {
     const downloadExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
     await client.query('update public.orders set status = $1, download_token_hash = $2, download_expires_at = $3, updated_at = now() where id = $4', ['paid', downloadTokenHash, downloadExpiresAt, orderId]);
     await client.query('update public.invoices set status = $1, updated_at = now() where id = $2', ['paid', order.invoice_id]);
+    await client.query('update public.payment_evidence set status = \'verified\', reviewed_at = now(), reviewer_id = \'admin\', review_notes = $1, updated_at = now() where order_id = $2 and status = \'pending\'', [reason, orderId]);
     await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['admin', 'manual_payment_approval', 'order', orderId, JSON.stringify({ reason, downloadExpiresAt })]);
     await client.query('commit');
     return res.json({ ok: true, status: 'paid', downloadUrl: `/api/download/${encodeURIComponent(downloadToken)}`, downloadExpiresAt });
@@ -462,12 +555,13 @@ app.post('/api/orders/:orderNumber/payment', rateLimit('payment-submit', 12, 15 
     const transaction = verification.transaction || {};
     const resultStatus = verification.status;
     const paymentStatus = resultStatus === 'confirmed' ? 'confirmed' : resultStatus === 'confirming' ? 'confirming' : resultStatus === 'manual_review' ? 'manual_review' : 'rejected';
+    let failedAttempts = Number(order.paymentFailedAttempts || 0);
 
     if (pgPool) {
       const client = await pgPool.connect();
       try {
         await client.query('begin');
-        const locked = await client.query('select o.id, o.status, i.id as invoice_id from public.orders o join public.invoices i on i.order_id = o.id where o.id = $1 for update', [order.id]);
+        const locked = await client.query('select o.id, o.status, o.payment_failed_attempts, o.payment_evidence_requested_at, i.id as invoice_id from public.orders o join public.invoices i on i.order_id = o.id where o.id = $1 for update', [order.id]);
         const current = locked.rows[0];
         if (!current) throw new Error('Order disappeared during payment verification.');
         if (current.status === 'paid') {
@@ -476,14 +570,27 @@ app.post('/api/orders/:orderNumber/payment', rateLimit('payment-submit', 12, 15 
         }
         const existingPayment = await client.query('select id, invoice_id from public.payments where txid = $1 limit 1', [txid]);
         if (existingPayment.rows[0] && existingPayment.rows[0].invoice_id !== current.invoice_id) {
-          await client.query('rollback');
-          return res.status(409).json({ ok: false, status: 'rejected', reason: 'txid_already_used', error: 'This transaction ID has already been submitted.' });
+          const attemptResult = await client.query('update public.orders set payment_failed_attempts = payment_failed_attempts + 1, payment_evidence_requested_at = case when payment_failed_attempts + 1 >= 2 then coalesce(payment_evidence_requested_at, now()) else payment_evidence_requested_at end, updated_at = now() where id = $1 returning payment_failed_attempts', [order.id]);
+          const duplicateAttempts = Number(attemptResult.rows[0]?.payment_failed_attempts || 0);
+          await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['customer', 'payment_failed_attempt', 'order', order.id, JSON.stringify({ reason: 'txid_already_used', attempts: duplicateAttempts })]);
+          await client.query('commit');
+          return res.status(409).json({ ok: false, status: 'rejected', reason: 'txid_already_used', paymentFailedAttempts: duplicateAttempts, paymentEvidenceRequested: duplicateAttempts >= 2, error: 'This transaction ID has already been submitted.' });
         }
         const paymentValues = [transaction.network || order.network, transaction.tokenContract || '', transaction.fromAddress || null, transaction.toAddress || '', Number(transaction.amountUsdt || 0), Number(transaction.confirmations || 0), paymentStatus, 'trongrid', JSON.stringify(transaction.raw || transaction), resultStatus === 'confirmed' ? new Date().toISOString() : null];
         if (existingPayment.rows[0]) {
           await client.query('update public.payments set network = $1, token_contract = $2, from_address = $3, to_address = $4, amount_usdt = $5, confirmations = $6, status = $7, provider = $8, raw_reference = $9, verified_at = $10, updated_at = now() where id = $11', [...paymentValues, existingPayment.rows[0].id]);
         } else {
           await client.query('insert into public.payments (invoice_id, txid, network, token_contract, from_address, to_address, amount_usdt, confirmations, status, provider, raw_reference, verified_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [current.invoice_id, txid, ...paymentValues]);
+        }
+        if (resultStatus === 'rejected') {
+          const attemptResult = await client.query(`
+            update public.orders
+            set payment_failed_attempts = payment_failed_attempts + 1,
+                payment_evidence_requested_at = case when payment_failed_attempts + 1 >= 2 then coalesce(payment_evidence_requested_at, now()) else payment_evidence_requested_at end,
+                updated_at = now()
+            where id = $1
+            returning payment_failed_attempts`, [order.id]);
+          failedAttempts = Number(attemptResult.rows[0]?.payment_failed_attempts || failedAttempts + 1);
         }
         if (resultStatus === 'confirmed') {
           const downloadToken = createDownloadToken();
@@ -500,7 +607,7 @@ app.post('/api/orders/:orderNumber/payment', rateLimit('payment-submit', 12, 15 
         await client.query('update public.orders set status = $1, updated_at = now() where id = $2', [newOrderStatus, order.id]);
         await client.query('update public.invoices set status = $1, updated_at = now() where id = $2', [newInvoiceStatus, current.invoice_id]);
         if (resultStatus === 'confirming') await enqueueJob(client, 'payment_check', `payment_check:${order.id}:${txid}`, { orderId: order.id, txid });
-        await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['integration', `payment_${paymentStatus}`, 'order', order.id, JSON.stringify({ txid, provider: 'trongrid', confirmations: transaction.confirmations || 0, reason: verification.reason || null })]);
+        await client.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['integration', `payment_${paymentStatus}`, 'order', order.id, JSON.stringify({ txid, provider: 'trongrid', confirmations: transaction.confirmations || 0, reason: verification.reason || null, failedAttempts })]);
         await client.query('commit');
       } catch (error) {
         await client.query('rollback');
@@ -510,13 +617,57 @@ app.post('/api/orders/:orderNumber/payment', rateLimit('payment-submit', 12, 15 
         client.release();
       }
     }
-    const message = resultStatus === 'confirming' ? 'Payment found. We are waiting for more confirmations.' : resultStatus === 'manual_review' ? 'Payment needs manual review.' : 'The transaction does not match this invoice.';
-    return res.status(resultStatus === 'confirming' ? 202 : resultStatus === 'manual_review' ? 202 : 422).json({ ok: resultStatus === 'confirming', status: resultStatus, reason: verification.reason, message, transaction: { confirmations: transaction.confirmations || 0 } });
+    const evidenceReady = resultStatus === 'rejected' && failedAttempts >= 2;
+    const message = resultStatus === 'confirming' ? 'Payment found. We are waiting for more confirmations.' : resultStatus === 'manual_review' ? 'Payment needs manual review.' : evidenceReady ? 'We could not match this TxID twice. On your next step, you can submit the transfer details or a screenshot for manual review.' : 'The transaction does not match this invoice.';
+    return res.status(resultStatus === 'confirming' ? 202 : resultStatus === 'manual_review' ? 202 : 422).json({ ok: resultStatus === 'confirming', status: resultStatus, reason: verification.reason, message, paymentFailedAttempts: failedAttempts, paymentEvidenceRequested: evidenceReady, transaction: { confirmations: transaction.confirmations || 0 } });
   } catch (error) {
     const mapped = txidError(error);
-    if (mapped) return res.status(mapped.status).json(mapped.body);
+    if (mapped) {
+      let attempt = null;
+      if (mapped.body.reason === 'transaction_not_found' || mapped.body.reason === 'invalid_txid') {
+        try { attempt = await recordFailedPaymentAttempt(orderNumber, statusToken, mapped.body.reason); } catch (attemptError) { console.error('failed payment attempt record failed', attemptError); }
+      }
+      const failedAttempts = Number(attempt?.payment_failed_attempts || 0);
+      const evidenceReady = failedAttempts >= 2;
+      return res.status(mapped.status).json({ ...mapped.body, paymentFailedAttempts: failedAttempts, paymentEvidenceRequested: evidenceReady, message: evidenceReady ? 'We could not match this TxID twice. On your next step, you can submit the transfer details or a screenshot for manual review.' : mapped.body.error });
+    }
     console.error('payment verification failed', error);
     return res.status(500).json({ ok: false, status: 'manual_review', error: 'Payment verification is temporarily unavailable.' });
+  }
+});
+
+app.post('/api/orders/:orderNumber/payment-evidence', rateLimit('payment-evidence', 3, 15 * 60 * 1000), async (req, res) => {
+  const orderNumber = cleanText(req.params.orderNumber, 80);
+  const statusToken = cleanText(req.body.statusToken, 128);
+  const txid = cleanText(req.body.txid, 128);
+  const transferText = cleanText(req.body.transferText, 3000);
+  const screenshot = typeof req.body.screenshotDataUrl === 'string' ? req.body.screenshotDataUrl.trim() : '';
+  if (!orderNumber || !statusToken || !hasDatabase()) return res.status(400).json({ ok: false, error: 'Order access token is required.' });
+  if (!txid && !transferText && !screenshot) return res.status(400).json({ ok: false, error: 'Provide a TxID, transfer details, or a screenshot.' });
+  if (screenshot && (!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\s]+$/.test(screenshot) || screenshot.length > 220000)) {
+    return res.status(400).json({ ok: false, error: 'Use a PNG, JPEG, or WebP screenshot smaller than 160 KB.' });
+  }
+  try {
+    const orderRow = await getOrderByAccessToken(orderNumber, statusToken);
+    if (!orderRow) return res.status(404).json({ ok: false, error: 'Order not found.' });
+    const order = normalizeOrder(orderRow);
+    if (order.status === 'paid') return res.status(409).json({ ok: false, status: 'confirmed', error: 'This order is already paid.' });
+    if (order.status === 'expired' || new Date(order.expiresAt).getTime() <= Date.now()) return res.status(409).json({ ok: false, status: 'expired', error: 'This invoice has expired.' });
+    if (order.paymentFailedAttempts < 2) return res.status(409).json({ ok: false, status: 'awaiting_payment', error: 'Manual evidence becomes available after two failed TxID checks.' });
+    if (!pgPool) return res.status(503).json({ ok: false, status: 'manual_review', error: 'Manual evidence review requires PostgreSQL.' });
+    const screenshotMimeType = screenshot.match(/^data:(image\/(?:png|jpeg|webp));base64,/)?.[1] || null;
+    const result = await pgPool.query(`
+      insert into public.payment_evidence (order_id, invoice_id, txid, transfer_text, screenshot_data_url, screenshot_mime_type)
+      select o.id, i.id, $1, $2, $3, $4
+      from public.orders o join public.invoices i on i.order_id = o.id
+      where o.id = $5
+      returning id, created_at`, [txid || null, transferText || null, screenshot || null, screenshotMimeType, order.id]);
+    await pgPool.query('update public.orders set status = \'manual_review\', payment_evidence_requested_at = coalesce(payment_evidence_requested_at, now()), updated_at = now() where id = $1 and status <> \'paid\'', [order.id]);
+    await pgPool.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['customer', 'payment_evidence_submitted', 'order', order.id, JSON.stringify({ evidenceId: result.rows[0]?.id, hasTxid: Boolean(txid), hasTransferText: Boolean(transferText), hasScreenshot: Boolean(screenshot), runtimeAddressMatchesInvoice: order.receivingAddress === paymentConfig().receivingAddress })]);
+    return res.status(202).json({ ok: true, status: 'manual_review', message: 'Your payment evidence was received. We will verify the transaction and release the kit if the blockchain details match the invoice.' });
+  } catch (error) {
+    console.error('payment evidence submission failed', error);
+    return res.status(500).json({ ok: false, status: 'manual_review', error: 'Could not submit payment evidence.' });
   }
 });
 
