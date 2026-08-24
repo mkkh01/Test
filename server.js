@@ -6,6 +6,7 @@ import pg from 'pg';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
+import { Webhook } from 'svix';
 import { fileURLToPath } from 'node:url';
 import { createDownloadToken, hashDownloadToken, isTokenExpired } from './src/delivery/download-token.js';
 import { productBundles } from './src/delivery/product-manifest.js';
@@ -75,6 +76,15 @@ function cleanText(value, max = 2000) {
 
 function isEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function extractEmailAddress(value) {
+  const match = String(value || '').match(/<([^>]+)>|([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})/);
+  return (match?.[1] || match?.[2] || '').trim().toLowerCase();
+}
+
+function webhookEventKey(req, event) {
+  return cleanText(req.get('svix-id') || event?.data?.email_id || event?.data?.message_id || '', 160);
 }
 
 function publicBaseUrl() {
@@ -258,7 +268,70 @@ async function recordFailedPaymentAttempt(orderNumber, statusToken, reason) {
 
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
+
+app.post('/api/resend/webhook', express.raw({ type: 'application/json', limit: '320kb' }), async (req, res) => {
+  const webhookSecret = process.env.RESEND_WEBHOOK_SECRET?.trim();
+  if (!webhookSecret) return res.status(503).json({ ok: false, error: 'Resend webhook is not configured.' });
+  const rawBody = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
+  if (!rawBody) return res.status(400).json({ ok: false, error: 'Webhook body is required.' });
+  let event;
+  try {
+    event = new Webhook(webhookSecret).verify(rawBody, {
+      id: req.get('svix-id') || '',
+      timestamp: req.get('svix-timestamp') || '',
+      signature: req.get('svix-signature') || ''
+    });
+  } catch {
+    return res.status(400).json({ ok: false, error: 'Invalid webhook signature.' });
+  }
+  if (!pgPool) return res.status(503).json({ ok: false, error: 'Webhook storage is temporarily unavailable.' });
+  const eventType = cleanText(event?.type, 80).toLowerCase();
+  const data = event?.data || {};
+  const eventKey = webhookEventKey(req, event);
+  const emailId = cleanText(data.email_id || data.message_id || '', 160);
+  const recipient = extractEmailAddress(Array.isArray(data.to) ? data.to[0] : data.to);
+  const metadata = { webhookId: eventKey || null, emailId: emailId || null, recipient: recipient || null, eventCreatedAt: cleanText(event?.created_at, 80) || null };
+  try {
+    if (eventKey) {
+      const duplicate = await pgPool.query(`select id from public.audit_logs
+        where entity_type = 'email' and action like 'resend_%' and metadata->>'webhookId' = $1
+        limit 1`, [eventKey]);
+      if (duplicate.rows[0]) return res.status(200).json({ ok: true, duplicate: true, received: eventType || 'unknown' });
+    }
+    await pgPool.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['integration', `resend_${eventType || 'unknown'}`, 'email', emailId || eventKey || 'unknown', JSON.stringify(metadata)]);
+    if (emailId && ['email.sent', 'email.delivered', 'email.opened', 'email.delivery_delayed'].includes(eventType)) {
+      await pgPool.query('update public.outreach_messages set provider = \'resend\', updated_at = now() where external_message_id = $1', [emailId]);
+    }
+    if (emailId && ['email.failed', 'email.bounced', 'email.complained', 'email.suppressed'].includes(eventType)) {
+      await pgPool.query(`update public.outreach_messages
+        set status = 'failed', error_message = $2, updated_at = now()
+        where external_message_id = $1 and status not in ('replied', 'rejected')`, [emailId, `Resend event: ${eventType}`]);
+    }
+    if (recipient && ['email.bounced', 'email.complained', 'email.suppressed'].includes(eventType)) {
+      await pgPool.query(`update public.leads
+        set contact_permission = 'blocked', sales_status = 'blocked', blocked_at = coalesce(blocked_at, now()), updated_at = now()
+        where lower(contact_email) = $1`, [recipient]);
+      await pgPool.query(`update public.outreach_messages
+        set status = 'failed', error_message = $2, updated_at = now()
+        where lower(recipient_email) = $1 and status in ('draft', 'approved', 'queued')`, [recipient, `Recipient blocked by Resend event: ${eventType}`]);
+    }
+    if (recipient && eventType === 'email.received') {
+      await pgPool.query(`update public.leads
+        set sales_status = 'replied', updated_at = now()
+        where lower(contact_email) = $1 and blocked_at is null`, [recipient]);
+      await pgPool.query(`update public.outreach_messages
+        set status = 'replied', updated_at = now()
+        where lower(recipient_email) = $1 and status = 'sent'`, [recipient]);
+    }
+    return res.status(200).json({ ok: true, received: eventType || 'unknown' });
+  } catch (error) {
+    console.error('resend webhook failed', String(error.message || error).slice(0, 300));
+    return res.status(500).json({ ok: false, error: 'Webhook processing failed.' });
+  }
+});
+
 app.use(express.json({ limit: '320kb' }));
+app.use('/api/admin', rateLimit('admin-api', 120, 15 * 60 * 1000));
 app.use(express.urlencoded({ extended: true, limit: '320kb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -912,11 +985,13 @@ app.post('/api/intake', rateLimit('intake-submit', 6, 60 * 60 * 1000), async (re
       submissionId = data?.id || null;
     }
     let emailStatus = 'not_configured';
+    let emailProviderMessageId = null;
     const wantsEmail = contactMethod.toLowerCase() === 'email';
     const allowedInCurrentMode = !resendProvider.testMode || email === resendProvider.testTo;
     if (wantsEmail && resendProvider.configured && allowedInCurrentMode) {
       try {
-        await resendProvider.sendSampleEmail({ to: submission.email, fullName: submission.full_name, issue: submission.business_type, previewUrl: `${publicBaseUrl()}/preview`, idempotencyKey: submissionId ? `sample-${submissionId}` : '' });
+        const emailResult = await resendProvider.sendSampleEmail({ to: submission.email, fullName: submission.full_name, issue: submission.business_type, previewUrl: `${publicBaseUrl()}/preview`, idempotencyKey: submissionId ? `sample-${submissionId}` : '' });
+        emailProviderMessageId = emailResult.providerMessageId || null;
         emailStatus = 'sent';
       } catch (error) {
         emailStatus = 'failed';
@@ -926,6 +1001,13 @@ app.post('/api/intake', rateLimit('intake-submit', 6, 60 * 60 * 1000), async (re
       emailStatus = 'skipped_contact_method';
     } else if (resendProvider.configured && resendProvider.testMode) {
       emailStatus = 'skipped_test_recipient';
+    }
+    if (pgPool) {
+      try {
+        await pgPool.query('insert into public.audit_logs (actor_type, action, entity_type, entity_id, metadata) values ($1,$2,$3,$4,$5)', ['integration', `sample_email_${emailStatus}`, 'intake_submission', String(submissionId || 'unknown'), JSON.stringify({ recipient: email, consent, contactMethod, previewPath: '/preview', provider: resendProvider.provider || null, providerMessageId: emailProviderMessageId })]);
+      } catch (auditError) {
+        console.error('sample email audit failed', String(auditError.message || auditError).slice(0, 300));
+      }
     }
     return res.status(201).json({ ok: true, stored: true, emailStatus, message: emailStatus === 'sent' ? 'Submission received and preview email sent.' : 'Submission received. Preview email is pending.' });
   } catch (error) {

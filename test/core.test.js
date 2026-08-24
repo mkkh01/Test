@@ -41,16 +41,26 @@ test('Atom parser extracts a Stack Overflow-style entry', () => {
   assert.match(item.body, /unpaid client/);
 });
 
-test('DEV candidate fetch normalizes public article data', async () => {
-  const items = await fetchDevToCandidates({ terms: ['late invoice'], limit: 2, fetchImpl: async () => ({ ok: true, status: 200, json: async () => [{ id: 7, url: 'https://dev.to/example/late-invoice', title: 'Late invoice help', description: 'My client has not paid.', user: { username: 'public-author' }, published_at: '2026-08-23T10:00:00Z' }] }) });
+test('DEV candidate fetch normalizes public article data and uses valid multiword tags', async () => {
+  const requestedUrls = [];
+  const items = await fetchDevToCandidates({ terms: ['late invoice'], limit: 2, fetchImpl: async (url) => { requestedUrls.push(url); return { ok: true, status: 200, json: async () => [{ id: 7, url: 'https://dev.to/example/late-invoice', title: 'Late invoice help', description: 'My client has not paid.', user: { username: 'public-author' }, published_at: '2026-08-23T10:00:00Z' }] }; } });
   assert.equal(items[0].source, 'dev_to');
   assert.equal(items[0].sourceUrl, 'https://dev.to/example/late-invoice');
   assert.equal(items[0].authorHandle, 'public-author');
+  assert.ok(requestedUrls.some((url) => url.includes('tag=late-invoice')));
+  assert.ok(!requestedUrls.some((url) => url.includes('tag=lateinvoice')));
 });
 
 test('payment configuration accepts Solana addresses and rejects TRON addresses', () => {
   assert.equal(isValidSolanaAddress(receivingAddress), true);
   assert.equal(isValidSolanaAddress('Tjv6h25tZoSjrhwpKtp6ZkKY'), false);
+});
+
+test('Solana provider falls back from a legacy TRON address to canonical settings', () => {
+  const provider = new SolanaRpcProvider({ receivingAddress: 'Tjv6h25tZoSjrhwpKtp6ZkKY', tokenContract: '' });
+  assert.equal(provider.configured, true);
+  assert.equal(provider.receivingAddress, receivingAddress);
+  assert.equal(provider.tokenContract, tokenMint);
 });
 
 test('USDT verifier rejects wrong network before provider access', async () => {

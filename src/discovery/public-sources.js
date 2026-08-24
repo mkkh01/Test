@@ -28,11 +28,18 @@ export async function fetchHackerNewsCandidates({ fetchImpl = fetch, terms = DEF
   return items.filter(Boolean).filter((item) => matchesTerms(item, terms));
 }
 
+function devTagsForTerm(term) {
+  const words = String(term || '').toLowerCase().match(/[a-z0-9]+/g) || [];
+  if (!words.length) return [];
+  const hyphenated = words.join('-');
+  const candidates = [hyphenated, ...words];
+  return [...new Set(candidates)].filter((tag) => tag.length >= 2 && tag.length <= 30);
+}
+
 export async function fetchDevToCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 20 } = {}) {
   const results = [];
-  for (const term of terms.slice(0, 6)) {
-    const tag = term.replace(/[^a-z0-9-]/gi, '').slice(0, 30);
-    if (!tag) continue;
+  const tags = [...new Set(terms.slice(0, 6).flatMap(devTagsForTerm))].slice(0, 12);
+  for (const tag of tags) {
     const url = `https://dev.to/api/articles?tag=${encodeURIComponent(tag)}&per_page=${Math.min(limit, 100)}`;
     const response = await fetchImpl(url, { headers: { Accept: 'application/json' } });
     if (!response.ok) continue;

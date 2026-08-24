@@ -175,3 +175,17 @@ flowchart TD
 5. `supabase/migrations/001_initial_schema.sql` و`004_lead_outreach_controls.sql` و`005_outreach_message_timestamps.sql` — المخطط والقيود.
 6. `docs/render-workers.md` و`docs/leads-outreach.md` — التشغيل الخارجي ومتطلبات الموافقة.
 7. `docs/resend-deliverability-notes.md` — ملاحظات deliverability ووضع الاختبار.
+
+## سجل إصلاحات ما بعد المراجعة
+
+تم تنفيذ الإصلاحات البرمجية الآمنة التالية بعد اعتماد هذه الوثيقة: أُنشئت migration `006_set_final_product_prices.sql` وطُبقت على Supabase لتثبيت 5/7/10 وإضافة قيد يمنع الانحراف؛ وأُنشئت migration `007_resend_webhook_idempotency.sql` وطُبقت لمنع تكرار حدث Resend نفسه في سجل التدقيق؛ وأضيف مسار `/api/resend/webhook` مع تحقق Svix من التوقيع وraw body وتحديث حالات bounce وcomplaint وsuppressed وreceived؛ وأضيف rate limit مستقل لمسارات الإدارة؛ وأصبح إرسال sample email يسجل حالة المحاولة ورقم رسالة المزود في `audit_logs` دون تخزين المفاتيح؛ كما تم تحسين tags الخاصة بـDEV للعبارات متعددة الكلمات وإضافة اختبارات تمنع عودة `lateinvoice`.
+
+الـwebhook أصبح موجودًا وآمنًا في الكود، لكنه لا يصبح نشطًا خارجيًا إلا بعد وضع `RESEND_WEBHOOK_SECRET` في Render وتسجيل عنوان `/api/resend/webhook` في لوحة Resend. لم يتم تسجيل webhook خارجي أو إرسال رسالة اختبار جديدة أثناء هذه الدورة. بقي `OUTREACH_SEND_ENABLED=false` كما هو.
+
+بعد الإصلاحات نجحت فحوصات syntax والاختبارات وعددها **28/28**. بقيت العناصر التشغيلية التي لا يمكن إنجازها من الكود وحده كما هي: اختبار Mainnet الحقيقي، إثبات Cron الخارجي، توثيق نطاق الإرسال، وتدوير مفتاح Gemini الذي ظهر سابقًا.
+
+## مراجع خارجية للـwebhooks
+
+8. [Resend — Managing Webhooks](https://resend.com/docs/webhooks/introduction) يوضح إنشاء webhook، إعادة المحاولة، والتسليم at-least-once.
+9. [Resend — Event Types](https://resend.com/docs/webhooks/event-types) يوضح أحداث `email.bounced` و`email.complained` و`email.received` وغيرها.
+10. [Resend — Verify Webhooks Requests](https://resend.com/docs/webhooks/verify-webhooks-requests) يوضح ضرورة استخدام raw body ورؤوس Svix وسر التوقيع.

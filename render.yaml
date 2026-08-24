@@ -37,6 +37,8 @@ services:
         sync: false
       - key: EMAIL_TEST_TO
         sync: false
+      - key: RESEND_WEBHOOK_SECRET
+        sync: false
       - key: OUTREACH_SEND_ENABLED
         value: "false"
       - key: OUTREACH_MIN_GAP_MINUTES
