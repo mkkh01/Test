@@ -308,7 +308,7 @@ app.get('/api/admin/summary', requireAdmin, async (_req, res) => {
         counts[table] = count || 0;
       }
     }
-    return res.json({ ok: true, counts, generatedAt: new Date().toISOString(), payment: { tronGridConfigured: tronGridProvider.configured, verifierConfigured: usdtVerifier.configured } });
+    return res.json({ ok: true, counts, generatedAt: new Date().toISOString(), payment: { network: 'SOLANA_SPL', asset: 'USDT-SPL', solanaRpcConfigured: solanaRpcProvider.configured, verifierConfigured: usdtVerifier.configured, confirmations: paymentConfig().minConfirmations } });
   } catch (error) {
     console.error('admin summary failed', error);
     return res.status(500).json({ ok: false, error: 'Could not load admin summary.' });
