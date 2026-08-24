@@ -12,7 +12,7 @@ import { productBundles } from './src/delivery/product-manifest.js';
 import { GeminiRouter } from './src/integrations/gemini-router.js';
 import { TelegramBot } from './src/integrations/telegram-bot.js';
 import { ResendProvider } from './src/integrations/resend-provider.js';
-import { SolanaRpcProvider } from './src/integrations/solana-rpc-provider.js';
+import { SolanaRpcProvider, isValidSolanaAddress } from './src/integrations/solana-rpc-provider.js';
 import { UsdtVerifier } from './src/integrations/usdt-verifier.js';
 import { requireAdmin } from './src/auth/admin-auth.js';
 
@@ -120,11 +120,18 @@ function runCronChild() {
 }
 
 function paymentConfig() {
+  const configuredNetwork = cleanText(process.env.USDT_NETWORK, 30);
+  const receivingAddress = cleanText(process.env.USDT_RECEIVING_ADDRESS, 128);
+  const tokenContract = cleanText(process.env.SOLANA_USDT_MINT, 128);
+  const minConfirmations = Number(process.env.USDT_MIN_CONFIRMATIONS || 1);
   return {
-    network: cleanText(process.env.USDT_NETWORK, 30) || 'SOLANA_SPL',
-    receivingAddress: cleanText(process.env.USDT_RECEIVING_ADDRESS, 128),
-    tokenContract: cleanText(process.env.SOLANA_USDT_MINT || process.env.USDT_TOKEN_CONTRACT, 128),
-    minConfirmations: Number(process.env.USDT_MIN_CONFIRMATIONS || 1)
+    network: 'SOLANA_SPL',
+    receivingAddress,
+    tokenContract,
+    minConfirmations,
+    valid: configuredNetwork === 'SOLANA_SPL'
+      && isValidSolanaAddress(receivingAddress)
+      && tokenContract === 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
   };
 }
 
@@ -269,7 +276,8 @@ app.get('/api/health', (_req, res) => {
     emailConfigured: resendProvider.configured,
     geminiKeyCount: geminiRouter.keys.length,
     solanaRpcConfigured: solanaRpcProvider.configured,
-    usdtConfigured: usdtVerifier.configured,
+    usdtConfigured: solanaRpcProvider.configured && usdtVerifier.configured && paymentConfig().valid,
+    paymentConfigurationValid: paymentConfig().valid,
     cronTriggerConfigured: Boolean(process.env.CRON_TRIGGER_SECRET?.trim()),
     usdtMinConfirmations: paymentConfig().minConfirmations
   });
@@ -308,7 +316,8 @@ app.get('/api/admin/summary', requireAdmin, async (_req, res) => {
         counts[table] = count || 0;
       }
     }
-    return res.json({ ok: true, counts, generatedAt: new Date().toISOString(), payment: { network: 'SOLANA_SPL', asset: 'USDT-SPL', solanaRpcConfigured: solanaRpcProvider.configured, verifierConfigured: usdtVerifier.configured, confirmations: paymentConfig().minConfirmations } });
+    const config = paymentConfig();
+    return res.json({ ok: true, counts, generatedAt: new Date().toISOString(), payment: { network: 'SOLANA_SPL', asset: 'USDT-SPL', configurationValid: config.valid, solanaRpcConfigured: solanaRpcProvider.configured, verifierConfigured: usdtVerifier.configured, confirmations: config.minConfirmations } });
   } catch (error) {
     console.error('admin summary failed', error);
     return res.status(500).json({ ok: false, error: 'Could not load admin summary.' });
@@ -628,7 +637,7 @@ app.post('/api/orders', rateLimit('order-create', 10, 60 * 60 * 1000), async (re
   if (!staticProduct || !isEmail(customerEmail)) return res.status(400).json({ ok: false, error: 'Choose a valid product and enter a valid email.' });
 
   const config = paymentConfig();
-  if (!config.receivingAddress) return res.status(503).json({ ok: false, code: 'PAYMENT_SETUP_REQUIRED', error: 'USDT checkout is not configured yet.' });
+  if (!config.valid) return res.status(503).json({ ok: false, code: 'PAYMENT_SETUP_REQUIRED', error: 'Solana USDT checkout is temporarily unavailable because its payment configuration is invalid.' });
   if (!hasDatabase()) {
     return res.status(503).json({ ok: false, code: 'DATABASE_REQUIRED', error: 'Checkout is temporarily unavailable.' });
   }

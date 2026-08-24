@@ -1,5 +1,6 @@
 const SUPPORTED_NETWORKS = new Set(['SOLANA_SPL']);
 
+
 function normalize(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -10,15 +11,16 @@ function asNumber(value) {
 }
 
 export class UsdtVerifier {
-  constructor({ network = process.env.USDT_NETWORK || 'SOLANA_SPL', receivingAddress = process.env.USDT_RECEIVING_ADDRESS || '', tokenContract = process.env.SOLANA_USDT_MINT || process.env.USDT_TOKEN_CONTRACT || '', provider } = {}) {
-    this.network = normalize(network);
+  constructor({ network = process.env.USDT_NETWORK || 'SOLANA_SPL', receivingAddress = process.env.USDT_RECEIVING_ADDRESS || '', tokenContract = process.env.SOLANA_USDT_MINT || '', provider } = {}) {
+    const configuredNetwork = normalize(network);
+    this.network = SUPPORTED_NETWORKS.has(configuredNetwork) ? configuredNetwork : '';
     this.receivingAddress = normalize(receivingAddress);
     this.tokenContract = normalize(tokenContract);
     this.provider = provider;
   }
 
   get configured() {
-    return Boolean(this.network && this.receivingAddress && this.tokenContract && this.provider);
+    return Boolean(this.network === 'SOLANA_SPL' && this.receivingAddress && this.tokenContract && this.provider);
   }
 
   validateInvoice({ amountUsdt, network, receivingAddress }) {

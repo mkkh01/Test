@@ -5,7 +5,7 @@ import { UsdtVerifier } from '../src/integrations/usdt-verifier.js';
 import { createDownloadToken, hashDownloadToken, tokenMatches, isTokenExpired } from '../src/delivery/download-token.js';
 import { GeminiRouter } from '../src/integrations/gemini-router.js';
 import { TelegramBot } from '../src/integrations/telegram-bot.js';
-import { SolanaRpcProvider } from '../src/integrations/solana-rpc-provider.js';
+import { SolanaRpcProvider, isValidSolanaAddress } from '../src/integrations/solana-rpc-provider.js';
 
 const fakeFetch = async (url, options = {}) => ({ ok: true, status: 200, json: async () => ({ ok: true, url, options }) });
 const receivingAddress = 'ES5uuF9x1XhipfPyKa7H5uLVEkjKXJ9w2MNFXBgphjVB';
@@ -46,6 +46,11 @@ test('DEV candidate fetch normalizes public article data', async () => {
   assert.equal(items[0].source, 'dev_to');
   assert.equal(items[0].sourceUrl, 'https://dev.to/example/late-invoice');
   assert.equal(items[0].authorHandle, 'public-author');
+});
+
+test('payment configuration accepts Solana addresses and rejects TRON addresses', () => {
+  assert.equal(isValidSolanaAddress(receivingAddress), true);
+  assert.equal(isValidSolanaAddress('Tjv6h25tZoSjrhwpKtp6ZkKY'), false);
 });
 
 test('USDT verifier rejects wrong network before provider access', async () => {

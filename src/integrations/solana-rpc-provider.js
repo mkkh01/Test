@@ -1,9 +1,25 @@
 const DEFAULT_RPC_URL = 'https://api.mainnet-beta.solana.com';
 const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const SOLANA_USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const SIGNATURE_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{64,96}$/;
 
 function clean(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+export function isValidSolanaAddress(value) {
+  const input = clean(value);
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(input)) return false;
+  let decoded = 0n;
+  for (const character of input) {
+    const digit = BASE58_ALPHABET.indexOf(character);
+    if (digit < 0) return false;
+    decoded = decoded * 58n + BigInt(digit);
+  }
+  const hexLength = decoded === 0n ? 0 : decoded.toString(16).length;
+  const decodedBytes = Math.ceil(hexLength / 2) + (input.match(/^1*/)?.[0].length || 0);
+  return decodedBytes === 32;
 }
 
 function asObject(value) {
@@ -32,7 +48,7 @@ export class SolanaRpcProvider {
   constructor({
     rpcUrl = process.env.SOLANA_RPC_URL || DEFAULT_RPC_URL,
     receivingAddress = process.env.USDT_RECEIVING_ADDRESS || '',
-    tokenContract = process.env.SOLANA_USDT_MINT || process.env.USDT_TOKEN_CONTRACT || '',
+    tokenContract = process.env.SOLANA_USDT_MINT || '',
     tokenDecimals = Number(process.env.USDT_TOKEN_DECIMALS || 6),
     commitment = process.env.SOLANA_COMMITMENT || 'finalized',
     fetchImpl = globalThis.fetch,
@@ -48,7 +64,7 @@ export class SolanaRpcProvider {
   }
 
   get configured() {
-    return Boolean(this.rpcUrl && this.fetchImpl && this.receivingAddress && this.tokenContract);
+    return Boolean(this.rpcUrl && this.fetchImpl && isValidSolanaAddress(this.receivingAddress) && this.tokenContract === SOLANA_USDT_MINT);
   }
 
   async request(method, params) {
@@ -191,4 +207,4 @@ export class SolanaRpcProvider {
   }
 }
 
-export const solanaConstants = { TOKEN_PROGRAM_ID, DEFAULT_RPC_URL, SIGNATURE_PATTERN };
+export const solanaConstants = { TOKEN_PROGRAM_ID, SOLANA_USDT_MINT, DEFAULT_RPC_URL, SIGNATURE_PATTERN };
