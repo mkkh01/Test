@@ -762,14 +762,21 @@ app.post('/api/intake', rateLimit('intake-submit', 6, 60 * 60 * 1000), async (re
   const submission = { full_name: fullName, email, company, business_type: businessType, current_situation: currentSituation, desired_outcome: desiredOutcome, budget, contact_method: contactMethod, source: cleanText(req.body.source, 120) || 'website', status: 'new' };
   if (!hasDatabase()) return res.status(503).json({ ok: false, error: 'The sample form is temporarily unavailable.' });
   try {
-    if (pgPool) await pgPool.query('insert into public.intake_submissions (full_name, email, company, business_type, current_situation, desired_outcome, budget, contact_method, source, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [submission.full_name, submission.email, submission.company, submission.business_type, submission.current_situation, submission.desired_outcome, submission.budget, submission.contact_method, submission.source, submission.status]);
-    else { const { error } = await supabase.from('intake_submissions').insert(submission); if (error) throw error; }
+    let submissionId = null;
+    if (pgPool) {
+      const result = await pgPool.query('insert into public.intake_submissions (full_name, email, company, business_type, current_situation, desired_outcome, budget, contact_method, source, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id', [submission.full_name, submission.email, submission.company, submission.business_type, submission.current_situation, submission.desired_outcome, submission.budget, submission.contact_method, submission.source, submission.status]);
+      submissionId = result.rows[0]?.id || null;
+    } else {
+      const { data, error } = await supabase.from('intake_submissions').insert(submission).select('id').single();
+      if (error) throw error;
+      submissionId = data?.id || null;
+    }
     let emailStatus = 'not_configured';
     const wantsEmail = contactMethod.toLowerCase() === 'email';
     const allowedInCurrentMode = !resendProvider.testMode || email === resendProvider.testTo;
     if (wantsEmail && resendProvider.configured && allowedInCurrentMode) {
       try {
-        await resendProvider.sendSampleEmail({ to: submission.email, fullName: submission.full_name, issue: submission.business_type, previewUrl: `${publicBaseUrl()}/preview` });
+        await resendProvider.sendSampleEmail({ to: submission.email, fullName: submission.full_name, issue: submission.business_type, previewUrl: `${publicBaseUrl()}/preview`, idempotencyKey: submissionId ? `sample-${submissionId}` : '' });
         emailStatus = 'sent';
       } catch (error) {
         emailStatus = 'failed';

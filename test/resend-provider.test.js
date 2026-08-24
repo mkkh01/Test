@@ -8,6 +8,7 @@ test('Resend provider sends a sample email through the API', async () => {
     provider: 'resend',
     apiKey: 're_test_only',
     from: 'onboarding@resend.dev',
+    replyTo: 'owner@example.com',
     testTo: 'owner@example.com',
     fetchImpl: async (url, options) => {
       request = { url, options, body: JSON.parse(options.body) };
@@ -19,16 +20,20 @@ test('Resend provider sends a sample email through the API', async () => {
     to: 'owner@example.com',
     fullName: 'Owner',
     issue: 'Unpaid invoices',
-    previewUrl: 'https://test-p2h3.onrender.com/preview.html'
+    previewUrl: 'https://test-p2h3.onrender.com/preview.html',
+    idempotencyKey: 'sample-test-123'
   });
 
   assert.deepEqual(result, { sent: true, status: 'sent', providerMessageId: 'email_test_123' });
   assert.equal(request.url, 'https://api.resend.com/emails');
   assert.equal(request.options.headers.Authorization, 'Bearer re_test_only');
   assert.deepEqual(request.body.to, ['owner@example.com']);
-  assert.equal(request.body.from, 'onboarding@resend.dev');
+  assert.equal(request.body.from, 'Client Protection Kit <onboarding@resend.dev>');
+  assert.deepEqual(request.body.reply_to, ['owner@example.com']);
+  assert.equal(request.options.headers['Idempotency-Key'], 'sample-test-123');
   assert.match(request.body.html, /preview\.html/);
   assert.match(request.body.text, /Unpaid invoices/);
+  assert.match(request.body.text, /requested a sample/);
 });
 
 test('Resend provider does not send when no key is configured', async () => {

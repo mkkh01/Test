@@ -33,6 +33,8 @@ services:
         sync: false
       - key: EMAIL_FROM
         value: onboarding@resend.dev
+      - key: EMAIL_REPLY_TO
+        sync: false
       - key: EMAIL_TEST_TO
         sync: false
       - key: GEMINI_API_KEY_COUNT
