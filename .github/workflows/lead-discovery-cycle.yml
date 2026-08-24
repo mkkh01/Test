@@ -6,7 +6,8 @@ on:
     - cron: '17,47 * * * *'
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
 concurrency:
   group: lead-discovery-cycle
@@ -19,18 +20,16 @@ jobs:
     steps:
       - name: Trigger protected Render cycle
         env:
-          CRON_TRIGGER_SECRET: ${{ secrets.CRON_TRIGGER_SECRET }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [ -z "$CRON_TRIGGER_SECRET" ]; then
-            echo "CRON_TRIGGER_SECRET is not configured in GitHub repository secrets."
-            exit 1
-          fi
           status=$(curl --silent --show-error --max-time 30 \
             --output /tmp/cron-response.json \
             --write-out '%{http_code}' \
             --request POST \
-            --header "Authorization: Bearer ${CRON_TRIGGER_SECRET}" \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header 'X-GitHub-Actions: true' \
+            --header 'X-GitHub-Repository: mkkh01/Test' \
             --header 'Accept: application/json' \
             https://test-p2h3.onrender.com/api/internal/cron/run)
           cat /tmp/cron-response.json

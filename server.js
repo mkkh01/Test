@@ -113,6 +113,27 @@ function cronAuthorized(req) {
   return expectedBuffer.length === providedBuffer.length && timingSafeEqual(expectedBuffer, providedBuffer);
 }
 
+async function githubActionsAuthorized(req) {
+  if (req.get('x-github-actions') !== 'true' || req.get('x-github-repository') !== 'mkkh01/Test') return false;
+  const authorization = req.get('authorization') || '';
+  if (!/^Bearer\s+\S+$/i.test(authorization)) return false;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch('https://api.github.com/repos/mkkh01/Test', {
+      headers: { Accept: 'application/vnd.github+json', Authorization: authorization, 'User-Agent': 'client-payment-scope-protection-kit' },
+      signal: controller.signal
+    });
+    if (!response.ok) return false;
+    const repository = await response.json();
+    return repository?.full_name === 'mkkh01/Test';
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 let cronRunning = false;
 
 function runCronChild() {
@@ -1017,7 +1038,7 @@ app.post('/api/intake', rateLimit('intake-submit', 6, 60 * 60 * 1000), async (re
 });
 
 const handleCronTrigger = async (req, res) => {
-  if (!cronAuthorized(req)) return res.status(401).json({ ok: false, error: 'Unauthorized cron trigger.' });
+  if (!cronAuthorized(req) && !(await githubActionsAuthorized(req))) return res.status(401).json({ ok: false, error: 'Unauthorized cron trigger.' });
   if (cronRunning) return res.status(409).json({ ok: false, status: 'already_running' });
   cronRunning = true;
   res.status(202).json({ ok: true, status: 'started', message: 'Cron cycle started. Check service logs for its summary.' });
