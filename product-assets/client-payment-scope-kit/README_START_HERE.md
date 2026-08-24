@@ -16,18 +16,32 @@ It is not a legal contract and it does not guarantee payment, revenue, or disput
 
 | Step | File | Use it when |
 |---:|---|---|
-| 1 | `01_CLIENT_DISCOVERY_FORM.html` | Online intake form for collecting and qualifying a new project |
+| 1 | `01_CLIENT_DISCOVERY_FORM.md` | Client discovery form for collecting and qualifying a new project |
 | 2 | `02_PROPOSAL_TEMPLATE.md` | After the client’s goal and budget are understood |
 | 3 | `03_SCOPE_OF_WORK.md` | Before work begins and before the first payment |
-| 4 | `04_CHANGE_REQUEST_FORM.html` | Online form whenever the client asks for work outside the approved scope |
+| 4 | `04_CHANGE_REQUEST_FORM.md` | Change Request form whenever the client asks for work outside the approved scope |
 | 5 | `05_INVOICE_AND_PAYMENT_TERMS.md` | When requesting a deposit, milestone, or final payment |
 | 6 | `06_PAYMENT_FOLLOWUP_EMAILS.md` | When payment is due, late, or promised for a future date |
 | 7 | `07_HANDOVER_AND_ACCEPTANCE.md` | When delivering the final work |
 | 8 | `08_PROJECT_PAYMENT_TRACKER.xlsx` | Throughout every project |
+| 9 | `09_AGENCY_PROJECT_OPERATING_SYSTEM.md` | Agency tier: portfolio control, stage gates, weekly rhythm, capacity, and risk register |
+| 10 | `10_TEAM_APPROVAL_FLOW.md` | Agency tier: internal/client approvals, responsibility matrix, and decision log |
+| 11 | `11_CLIENT_COMMUNICATION_LOG.md` | Agency tier: communication register, follow-ups, meeting notes, and payment evidence log |
+| 12 | `12_AGENCY_PROFITABILITY_WORKSHEET.xlsx` | Agency tier: project P&L, capacity plan, change impact, and dashboard |
 
-## What the Online Forms Actually Do
+## Tier Guide
 
-The HTML files are working front-end demos of the two most important forms. They use real short-answer, email, URL, date, dropdown, multiple-choice, checkbox, paragraph, required-field, and conditional-message controls. In production, the submit handler should be connected to the private application backend; the demo does not transmit data anywhere.
+| Tier | Intended user | Included focus |
+|---|---|---|
+| Starter | Freelancer starting a project | Proposal, scope, payment terms, and follow-ups |
+| Complete | Freelancer or consultant running the full workflow | Discovery through handover, tracker, and worked example |
+| Agency | Small agency or team managing multiple projects | Complete workflow plus portfolio operations, approvals, communications, capacity, and profitability |
+
+The Agency-only files are included in the Agency ZIP. They extend the core workflow; they do not replace the Proposal, SOW, Change Request, Invoice, Follow-up, Handover, or Tracker files.
+
+## What the Forms Actually Do
+
+The form files are practical Markdown templates for adapting into a document or online form. They include clear fields, required decisions, and conditional guidance. In the web store, the product intake form is implemented by the private application backend; the downloadable files are reusable client-facing templates and do not transmit data anywhere by themselves.
 
 ## Five Rules That Make the Kit Work
 
@@ -93,5 +107,5 @@ If you accept USDT, complete the payment section with one network only and doubl
 - [ ] No private key, seed phrase, password, or card details are included.
 - [ ] A clean copy has been saved for reuse.
 
-**Version:** 1.0  
+**Version:** 1.1
 **Product:** Client Payment & Scope Protection Kit
