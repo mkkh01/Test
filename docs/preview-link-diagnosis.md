@@ -17,3 +17,5 @@ The user's screenshot shows the browser resolving a malformed host/path containi
 Final live verification after commit `a508560`: `/preview` and `/preview.html` both returned HTTP 200 and the preview content was present. `/api/health` reported `emailConfigured=true`. The malformed `%20public_base_url` value was never sent again after this fix, and no additional email was sent during troubleshooting.
 
 The visual sample viewer was deployed in commit `f957153`. Live verification of `https://test-p2h3.onrender.com/preview` returned HTTP 200 and confirmed the page contains Starter, Complete, and Agency preview panels. The page uses browser-rendered document mockups and exposes no downloadable paid files.
+
+The deeper solution preview was deployed in commit `a8be356`. Live verification returned HTTP 200 and confirmed the page includes the problem statement, `Scope boundary`, `Payment follow-up`, `Change request`, `Invoice + USDT instructions`, `Handover & acceptance`, and `Agency control center` modules. The modules are browser-rendered sample views; no paid ZIP or download endpoint is exposed by the preview.

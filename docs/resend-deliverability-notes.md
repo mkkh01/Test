@@ -7,3 +7,7 @@ Sources:
 - https://resend.com/docs/dashboard/emails/deliverability-insights
 - https://resend.com/docs/api-reference/emails/send-email
 - https://resend.com/docs/dashboard/emails/add-unsubscribe-to-transactional-emails
+
+Render environment edit was opened without revealing secret values. A new empty environment-variable row is present at the end of the list; it will be filled only with `EMAIL_REPLY_TO=memo2026186@gmail.com` before saving.
+
+Final verification: `EMAIL_REPLY_TO=memo2026186@gmail.com` was added in Render without exposing API secrets. The live health endpoint reports `emailConfigured=true`; code syntax checks pass and all 23 tests pass. No additional live email was sent during this deliverability configuration change.
