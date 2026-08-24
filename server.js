@@ -12,7 +12,7 @@ import { productBundles } from './src/delivery/product-manifest.js';
 import { GeminiRouter } from './src/integrations/gemini-router.js';
 import { TelegramBot } from './src/integrations/telegram-bot.js';
 import { ResendProvider } from './src/integrations/resend-provider.js';
-import { SolanaRpcProvider, isValidSolanaAddress } from './src/integrations/solana-rpc-provider.js';
+import { SolanaRpcProvider, isValidSolanaAddress, solanaConstants } from './src/integrations/solana-rpc-provider.js';
 import { UsdtVerifier } from './src/integrations/usdt-verifier.js';
 import { requireAdmin } from './src/auth/admin-auth.js';
 
@@ -39,6 +39,7 @@ const pgPool = databaseUrl
 const geminiRouter = new GeminiRouter();
 const telegramBot = new TelegramBot();
 const resendProvider = new ResendProvider();
+const { SOLANA_USDT_MINT, SOLANA_DEFAULT_RECEIVING_ADDRESS } = solanaConstants;
 const solanaRpcProvider = new SolanaRpcProvider();
 const usdtVerifier = new UsdtVerifier({ provider: solanaRpcProvider.configured ? solanaRpcProvider : null });
 const products = [
@@ -120,18 +121,17 @@ function runCronChild() {
 }
 
 function paymentConfig() {
-  const configuredNetwork = cleanText(process.env.USDT_NETWORK, 30);
-  const receivingAddress = cleanText(process.env.USDT_RECEIVING_ADDRESS, 128);
-  const tokenContract = cleanText(process.env.SOLANA_USDT_MINT, 128);
+  const configuredAddress = cleanText(process.env.USDT_RECEIVING_ADDRESS, 128);
+  const configuredMint = cleanText(process.env.SOLANA_USDT_MINT, 128);
+  const receivingAddress = isValidSolanaAddress(configuredAddress) ? configuredAddress : SOLANA_DEFAULT_RECEIVING_ADDRESS;
+  const tokenContract = configuredMint || SOLANA_USDT_MINT;
   const minConfirmations = Number(process.env.USDT_MIN_CONFIRMATIONS || 1);
   return {
     network: 'SOLANA_SPL',
     receivingAddress,
     tokenContract,
     minConfirmations,
-    valid: configuredNetwork === 'SOLANA_SPL'
-      && isValidSolanaAddress(receivingAddress)
-      && tokenContract === 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
+    valid: isValidSolanaAddress(receivingAddress) && tokenContract === SOLANA_USDT_MINT
   };
 }
 

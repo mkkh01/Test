@@ -1,6 +1,7 @@
 const DEFAULT_RPC_URL = 'https://api.mainnet-beta.solana.com';
 const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const SOLANA_USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+const SOLANA_DEFAULT_RECEIVING_ADDRESS = 'ES5uuF9x1XhipfPyKa7H5uLVEkjKXJ9w2MNFXBgphjVB';
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const SIGNATURE_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{64,96}$/;
 
@@ -47,16 +48,18 @@ function matchingBalance(balances, accountIndex, mint) {
 export class SolanaRpcProvider {
   constructor({
     rpcUrl = process.env.SOLANA_RPC_URL || DEFAULT_RPC_URL,
-    receivingAddress = process.env.USDT_RECEIVING_ADDRESS || '',
-    tokenContract = process.env.SOLANA_USDT_MINT || '',
+    receivingAddress,
+    tokenContract,
     tokenDecimals = Number(process.env.USDT_TOKEN_DECIMALS || 6),
     commitment = process.env.SOLANA_COMMITMENT || 'finalized',
     fetchImpl = globalThis.fetch,
     timeoutMs = 15_000
   } = {}) {
+    const requestedAddress = clean(receivingAddress ?? process.env.USDT_RECEIVING_ADDRESS);
+    const requestedMint = clean(tokenContract ?? process.env.SOLANA_USDT_MINT);
     this.rpcUrl = clean(rpcUrl);
-    this.receivingAddress = clean(receivingAddress);
-    this.tokenContract = clean(tokenContract);
+    this.receivingAddress = isValidSolanaAddress(requestedAddress) ? requestedAddress : SOLANA_DEFAULT_RECEIVING_ADDRESS;
+    this.tokenContract = requestedMint || SOLANA_USDT_MINT;
     this.tokenDecimals = Number.isInteger(tokenDecimals) && tokenDecimals >= 0 ? tokenDecimals : 6;
     this.commitment = ['confirmed', 'finalized'].includes(clean(commitment)) ? clean(commitment) : 'finalized';
     this.fetchImpl = fetchImpl;
@@ -207,4 +210,4 @@ export class SolanaRpcProvider {
   }
 }
 
-export const solanaConstants = { TOKEN_PROGRAM_ID, SOLANA_USDT_MINT, DEFAULT_RPC_URL, SIGNATURE_PATTERN };
+export const solanaConstants = { TOKEN_PROGRAM_ID, SOLANA_USDT_MINT, SOLANA_DEFAULT_RECEIVING_ADDRESS, DEFAULT_RPC_URL, SIGNATURE_PATTERN };

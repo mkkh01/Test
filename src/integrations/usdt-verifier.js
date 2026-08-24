@@ -1,5 +1,6 @@
 const SUPPORTED_NETWORKS = new Set(['SOLANA_SPL']);
-
+const SOLANA_USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+const SOLANA_DEFAULT_RECEIVING_ADDRESS = 'ES5uuF9x1XhipfPyKa7H5uLVEkjKXJ9w2MNFXBgphjVB';
 
 function normalize(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -11,7 +12,7 @@ function asNumber(value) {
 }
 
 export class UsdtVerifier {
-  constructor({ network = process.env.USDT_NETWORK || 'SOLANA_SPL', receivingAddress = process.env.USDT_RECEIVING_ADDRESS || '', tokenContract = process.env.SOLANA_USDT_MINT || '', provider } = {}) {
+  constructor({ network = 'SOLANA_SPL', receivingAddress = process.env.USDT_RECEIVING_ADDRESS || SOLANA_DEFAULT_RECEIVING_ADDRESS, tokenContract = process.env.SOLANA_USDT_MINT || SOLANA_USDT_MINT, provider } = {}) {
     const configuredNetwork = normalize(network);
     this.network = SUPPORTED_NETWORKS.has(configuredNetwork) ? configuredNetwork : '';
     this.receivingAddress = normalize(receivingAddress);

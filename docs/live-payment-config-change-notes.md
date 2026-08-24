@@ -1,0 +1,5 @@
+# Live payment configuration change notes
+
+The user explicitly authorized correcting the live Render payment settings. In the Render Test service environment editor, the following non-secret payment configuration fields were set to the Solana-only values already established for this project: `USDT_NETWORK=SOLANA_SPL`, the previously supplied Solana receiving address, `USDT_TOKEN_CONTRACT` equal to the official USDT-SPL mint, and a newly added `SOLANA_USDT_MINT` equal to the official USDT-SPL mint. Secret values were not opened, copied, or recorded. The form is prepared for save/rebuild/deploy; no payment, email, cron, or database deletion was performed.
+
+The first save/redeploy attempt did not take effect correctly: live health still reported `paymentConfigurationValid=false` and `solanaRpcConfigured=false`. Render's editor showed a duplicate/misnamed variable (`SOLANA_SPL`) alongside the intended names, indicating the first DOM-based edit targeted the wrong row. The service remained fail-closed; no new invoice or payment was attempted. A second correction is in progress using the exact Render fields.
