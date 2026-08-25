@@ -50,6 +50,7 @@ Required later integrations:
 - Optional `REDDIT_ACCESS_TOKEN` or `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET`, plus a descriptive `REDDIT_USER_AGENT`
 - Optional `X_API_BEARER_TOKEN` for X Recent Search
 - Optional `BRAVE_SEARCH_API_KEY` for broad public web search without Reddit/X app access
+- Optional `DISCOVERY_EXTRA_TERMS` for comma- or pipe-separated country and language terms
 
 The five Gemini keys are for reliability and controlled rotation, not for bypassing provider quotas or terms. The application will record key health, apply per-key limits, and stop or fall back to deterministic rules when no key is available.
 
@@ -96,7 +97,7 @@ The payment module verifies a successful transaction, correct network, correct t
 Approved public sources → deduplicate → keyword/rule filter → public account + post URL → Gemini analysis → lead score → English message draft → human review → manual send by owner
 ```
 
-Each lead record shows the public platform, account handle when available, source URL, problem excerpt, fit score, recommended kit, and a short English draft. The system does not claim to know a private email address or purchase intent. It will not scrape private data, bypass CAPTCHAs, create fake accounts, send direct messages, publish replies, or send uncontrolled bulk messages. Reddit uses OAuth and a descriptive User-Agent when configured; X uses the official Recent Search endpoint and only returns public, unprotected authors. Brave provides the broad web-search layer when its optional key is configured; Google News RSS is a best-effort public feed, not Google result-page scraping. Source connectors are enabled only after confirming their official capabilities and terms.
+Each lead record shows the public platform, account handle when available, source URL, problem excerpt, fit score, recommended kit, and a short English draft. The catalog in `docs/lead-source-catalog.md` lists source communities and regional search phrases; `DISCOVERY_EXTRA_TERMS` can extend the scheduled search without changing code. The system does not claim to know a private email address or purchase intent. It will not scrape private data, bypass CAPTCHAs, create fake accounts, send direct messages, publish replies, or send uncontrolled bulk messages. Reddit uses OAuth and a descriptive User-Agent when configured; X uses the official Recent Search endpoint and only returns public, unprotected authors. Brave provides the broad web-search layer when its optional key is configured; Google News RSS is a best-effort public feed, not Google result-page scraping. Source connectors are enabled only after confirming their official capabilities and terms.
 
 ## Quality and security principles
 

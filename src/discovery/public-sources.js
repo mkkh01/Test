@@ -3,6 +3,16 @@ const DEFAULT_TERMS = [
   'extra revisions', 'working for free', 'client disappeared', 'need a deposit',
   'payment terms', 'freelance contract'
 ];
+const GLOBAL_SEARCH_TERMS = [
+  'cliente no paga', 'factura impaga', 'escopo do projeto', 'fatura não paga',
+  'client ne paie pas', 'facture impayée', 'عميل لم يدفع', 'تأخر الدفع',
+  '未付款 客户', 'フリーランス 支払い遅延'
+];
+
+function broadSearchTerms(terms) {
+  const extra = String(process.env.DISCOVERY_EXTRA_TERMS || '').split(/[|,]/).map((term) => term.trim()).filter(Boolean);
+  return [...new Set([...terms.slice(0, 6), ...extra, ...GLOBAL_SEARCH_TERMS])].slice(0, 24);
+}
 
 function clean(value, max = 4000) {
   return typeof value === 'string' ? value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '';
@@ -239,9 +249,10 @@ function publicHandleFromUrl(value) {
 export async function fetchBraveSearchCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 20 } = {}) {
   const token = (process.env.BRAVE_SEARCH_API_KEY || process.env.BRAVE_API_KEY)?.trim();
   if (!token) return [];
-  const termQuery = terms.slice(0, 8).map((term) => `"${String(term).replace(/"/g, '')}"`).join(' OR ');
+  const searchTerms = broadSearchTerms(terms);
+  const termQuery = searchTerms.slice(0, 16).map((term) => `"${String(term).replace(/"/g, '')}"`).join(' OR ');
   const query = `(${termQuery}) (site:reddit.com OR site:x.com OR site:github.com OR site:dev.to OR site:indiehackers.com)`;
-  const params = new URLSearchParams({ q: query, count: String(Math.max(1, Math.min(boundedLimit(limit, 20), 20))), search_lang: 'en', country: 'us', safesearch: 'moderate' });
+  const params = new URLSearchParams({ q: query, count: String(Math.max(1, Math.min(boundedLimit(limit, 20), 20))), country: 'us', safesearch: 'moderate' });
   const response = await fetchImpl(`https://api.search.brave.com/res/v1/web/search?${params.toString()}`, { headers: { Accept: 'application/json', 'X-Subscription-Token': token } });
   if (!response.ok) throw new Error(`Brave Search request failed: ${response.status}`);
   const payload = await response.json();
@@ -253,19 +264,20 @@ export async function fetchBraveSearchCandidates({ fetchImpl = fetch, terms = DE
     body: clean(result.description || result.title),
     authorHandle: publicHandleFromUrl(result.url),
     publishedAt: result.age || null
-  })).filter((item) => item.sourceUrl && matchesTerms(item, terms));
+  })).filter((item) => item.sourceUrl && matchesTerms(item, searchTerms));
 }
 
 export async function fetchGoogleNewsCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 10 } = {}) {
   const results = [];
-  for (const term of terms.slice(0, 6)) {
+  const searchTerms = broadSearchTerms(terms).slice(0, 10);
+  for (const term of searchTerms) {
     const params = new URLSearchParams({ q: term, hl: 'en-US', gl: 'US', ceid: 'US:en' });
     const response = await fetchImpl(`https://news.google.com/rss/search?${params.toString()}`, { headers: { Accept: 'application/rss+xml, application/xml, text/xml' } });
     if (!response.ok) continue;
     const items = parseRss(await response.text(), { source: 'google_news', baseUrl: 'https://news.google.com/' });
     results.push(...items.slice(0, boundedLimit(limit, 10)));
   }
-  return results.filter((item) => matchesTerms(item, terms));
+  return results.filter((item) => matchesTerms(item, searchTerms));
 }
 
 export async function fetchGitHubIssueCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 25 } = {}) {
