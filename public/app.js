@@ -50,6 +50,7 @@ loadLiveProductPrices();
 
 let activeOrder = null;
 let statusPollTimer = null;
+let downloadRedirected = false;
 
 function setStatus(element, text, color = '#687386') {
   if (!element) return;
@@ -120,9 +121,16 @@ function showEvidencePanel(result = {}) {
 function renderDownload(order) {
   if (!order?.downloadUrl) return;
   downloadPanel?.classList.remove('hidden');
-  if (downloadMessage) downloadMessage.textContent = 'Payment confirmed. Your digital kit is ready.';
+  if (downloadMessage) downloadMessage.textContent = 'Payment confirmed. Your download is starting now.';
   if (downloadLink) downloadLink.href = order.downloadUrl;
   txidForm?.classList.add('hidden');
+  evidenceForm?.classList.add('hidden');
+  if (!downloadRedirected) {
+    downloadRedirected = true;
+    window.setTimeout(() => {
+      window.location.assign(new URL(order.downloadUrl, window.location.origin).href);
+    }, 350);
+  }
 }
 
 for (const button of document.querySelectorAll('.choose-product')) {
@@ -134,6 +142,7 @@ for (const button of document.querySelectorAll('.choose-product')) {
     checkoutPanel.classList.remove('hidden');
     paymentPanel?.classList.add('hidden');
     downloadPanel?.classList.add('hidden');
+    downloadRedirected = false;
     checkoutPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
 }
