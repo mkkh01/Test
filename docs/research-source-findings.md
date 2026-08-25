@@ -33,3 +33,7 @@
 بديل بحث عام موثق: https://brave.com/search/api/. يقدم Brave Search API بحث الويب عبر endpoint رسمي باستخدام `X-Subscription-Token`، وتذكر الصفحة رصيدًا مجانيًا شهريًا بقيمة 5 دولارات. هذا لا يحتاج إلى إنشاء تطبيق داخل Reddit أو X، لكنه يحتاج حساب Brave ومفتاح API، وقد يتطلب وسيلة دفع وفق إعداد الحساب. سيبقى استخدامه محدودًا ومعدلًا، مع تخزين النتائج العامة الضرورية فقط.
 
 لا ينبغي كشط صفحات نتائج Google HTML أو إرسال استعلامات آلية مباشرة إلى Google؛ المسار الأنسب هو Brave Search API كطبقة بحث عامة، مع إبقاء المصادر الرسمية المباشرة مثل GitHub وStack Exchange وDEV وBluesky وReddit/X اختيارية.
+
+## مراجعة Bluesky في دورة Render
+
+سجل Render أظهر `fetch failed` من Bluesky. اختُبر `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts` وendpoint البديل `https://api.bsky.app/xrpc/app.bsky.feed.searchPosts` ببحث عام محدود، وكلاهما أعاد HTTP 403 من بيئة التشغيل مع رسالة administrative rules. لذلك لا ينبغي اعتبار Bluesky مصدرًا مجانيًا مضمونًا في هذه البيئة؛ يجب عزله أو تعطيله افتراضيًا بدل تسجيل فشل متكرر، مع إبقاء بقية المصادر تعمل.

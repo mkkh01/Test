@@ -163,6 +163,7 @@ test('discovery keeps successful sources when one source fails', async () => {
   assert.equal(summary.sources.stack_exchange_communities.mode, 'ok');
   assert.equal(summary.sources.discourse_forums.mode, 'ok');
   assert.equal(summary.sources.hacker_news.mode, 'ok');
+  assert.equal(summary.sources.bluesky.mode, 'disabled');
   assert.ok(summary.discovered >= 1);
 });
 

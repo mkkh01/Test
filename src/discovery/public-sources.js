@@ -28,9 +28,25 @@ function boundedLimit(limit, fallback = 20) {
   return Number.isInteger(value) && value > 0 ? Math.min(value, 100) : fallback;
 }
 
+async function requestWithRetry(fetchImpl, url, options = {}, attempts = 2) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetchImpl(url, options);
+      if (response.ok || ![408, 425, 429, 500, 502, 503, 504].includes(response.status) || attempt === attempts - 1) return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts - 1) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+  }
+  throw lastError || new Error('request failed');
+}
+
 export function publicSourceStatus() {
   return {
     redditConfigured: Boolean(process.env.REDDIT_ACCESS_TOKEN?.trim() || (process.env.REDDIT_CLIENT_ID?.trim() && process.env.REDDIT_CLIENT_SECRET?.trim())),
+    blueskyConfigured: process.env.BLUESKY_SEARCH_ENABLED?.trim().toLowerCase() === 'true',
     xConfigured: Boolean((process.env.X_API_BEARER_TOKEN || process.env.X_BEARER_TOKEN)?.trim()),
     braveConfigured: Boolean((process.env.BRAVE_SEARCH_API_KEY || process.env.BRAVE_API_KEY)?.trim()),
     googleNewsConfigured: true,
@@ -177,24 +193,35 @@ export async function fetchDiscourseCandidates({ fetchImpl = fetch, terms = DEFA
 
 export async function fetchBlueskyCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 25 } = {}) {
   const results = [];
+  const failures = [];
+  let successfulRequests = 0;
   for (const term of terms.slice(0, 6)) {
     const url = `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(term)}&limit=${boundedLimit(limit, 25)}`;
-    const response = await fetchImpl(url, { headers: { Accept: 'application/json' } });
-    if (!response.ok) continue;
-    const payload = await response.json();
-    for (const post of payload.posts || []) {
-      const record = post.record || {};
-      results.push({
-        source: 'bluesky',
-        externalId: post.uri || post.cid,
-        sourceUrl: post.uri || `https://bsky.app/profile/${post.author?.handle}/post/${post.uri?.split('/').pop()}`,
-        title: '',
-        body: clean(record.text),
-        authorHandle: clean(post.author?.handle, 120),
-        publishedAt: record.createdAt || null
-      });
+    try {
+      const response = await requestWithRetry(fetchImpl, url, { headers: { Accept: 'application/json' } });
+      if (!response.ok) {
+        failures.push(`${term}:${response.status}`);
+        continue;
+      }
+      successfulRequests += 1;
+      const payload = await response.json();
+      for (const post of payload.posts || []) {
+        const record = post.record || {};
+        results.push({
+          source: 'bluesky',
+          externalId: post.uri || post.cid,
+          sourceUrl: post.uri || `https://bsky.app/profile/${post.author?.handle}/post/${post.uri?.split('/').pop()}`,
+          title: '',
+          body: clean(record.text),
+          authorHandle: clean(post.author?.handle, 120),
+          publishedAt: record.createdAt || null
+        });
+      }
+    } catch (error) {
+      failures.push(`${term}:${String(error.message || error).slice(0, 120)}`);
     }
   }
+  if (!successfulRequests && failures.length) throw new Error(`Bluesky requests failed: ${failures.join(', ')}`);
   return results.filter((item) => matchesTerms(item, terms));
 }
 
@@ -337,14 +364,27 @@ export async function fetchGoogleNewsCandidates({ fetchImpl = fetch, terms = DEF
 }
 
 export async function fetchGitHubIssueCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 25 } = {}) {
-  const query = `(${terms.slice(0, 8).map((term) => `"${String(term).replace(/"/g, '')}"`).join(' OR ')}) in:title,body type:issue state:open`;
-  const params = new URLSearchParams({ q: query, sort: 'created', order: 'desc', per_page: String(boundedLimit(limit, 25)) });
-  const response = await fetchImpl(`https://api.github.com/search/issues?${params.toString()}`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'client-payment-scope-protection-kit' } });
-  if (!response.ok) throw new Error(`GitHub issue search request failed: ${response.status}`);
+  const termQuery = terms.slice(0, 8).map((term) => `"${String(term).replace(/"/g, '')}"`).join(' OR ');
+  const queries = [
+    `(${termQuery}) in:title,body is:issue is:open`,
+    `(${termQuery}) is:issue is:open`,
+    termQuery
+  ];
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'client-payment-scope-protection-kit' };
+  let response;
+  let lastStatus = 0;
+  for (const query of queries) {
+    const params = new URLSearchParams({ q: query, sort: 'created', order: 'desc', per_page: String(boundedLimit(limit, 25)) });
+    response = await requestWithRetry(fetchImpl, `https://api.github.com/search/issues?${params.toString()}`, { headers });
+    lastStatus = response.status;
+    if (response.ok) break;
+    if (response.status !== 422) break;
+  }
+  if (!response?.ok) throw new Error(`GitHub issue search request failed: ${lastStatus}`);
   const payload = await response.json();
-  return (payload.items || []).map((issue) => ({
+  return (payload.items || []).filter((issue) => !issue.pull_request).map((issue) => ({
     source: 'github_issues',
-    externalId: String(issue.id || issue.node_id || issue.html_url),
+    externalId: String(issue.id || issue.html_url),
     sourceUrl: issue.html_url,
     title: clean(issue.title),
     body: clean(issue.body || issue.title),

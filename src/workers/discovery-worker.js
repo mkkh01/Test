@@ -75,7 +75,7 @@ export async function runDiscovery({ fetchImpl = fetch } = {}) {
   const configured = publicSourceStatus();
   const sourceTasks = [
     ['hacker_news', () => fetchHackerNewsCandidates({ fetchImpl, limit: 40 }), true],
-    ['bluesky', () => fetchBlueskyCandidates({ fetchImpl, limit: 12 }), true],
+    ['bluesky', () => fetchBlueskyCandidates({ fetchImpl, limit: 12 }), configured.blueskyConfigured],
     ['dev_to', () => fetchDevToCandidates({ fetchImpl, limit: 10 }), true],
     ['stack_overflow', () => fetchStackOverflowCandidates({ fetchImpl }), true],
     ['stack_exchange_communities', () => fetchStackExchangeCommunityCandidates({ fetchImpl, limit: 20 }), true],
