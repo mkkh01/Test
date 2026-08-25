@@ -37,4 +37,33 @@ jobs:
             echo "Unexpected Render cron response: HTTP $status"
             exit 1
           fi
-          echo "Render accepted the cycle trigger with HTTP 202."
+          run_id=$(jq -r '.runId // empty' /tmp/cron-response.json)
+          if [ -z "$run_id" ]; then
+            echo "Render did not return a cron run id."
+            exit 1
+          fi
+          echo "Render accepted the cycle trigger with HTTP 202; run id is $run_id."
+          for attempt in $(seq 1 36); do
+            sleep 5
+            curl --silent --show-error --max-time 30 \
+              --output /tmp/cron-status.json \
+              --request GET \
+              --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+              --header 'X-GitHub-Actions: true' \
+              --header 'X-GitHub-Repository: mkkh01/Test' \
+              --header 'Accept: application/json' \
+              https://test-p2h3.onrender.com/api/internal/cron/status
+            cat /tmp/cron-status.json
+            current_run_id=$(jq -r '.lastRun.runId // empty' /tmp/cron-status.json)
+            run_status=$(jq -r '.lastRun.status // empty' /tmp/cron-status.json)
+            if [ "$current_run_id" = "$run_id" ] && [ "$run_status" = "completed" ]; then
+              echo "Render completed cron run $run_id."
+              exit 0
+            fi
+            if [ "$current_run_id" = "$run_id" ] && [ "$run_status" = "failed" ]; then
+              echo "Render failed cron run $run_id."
+              exit 1
+            fi
+          done
+          echo "Timed out waiting for Render cron run $run_id."
+          exit 1
