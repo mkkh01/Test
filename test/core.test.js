@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deduplicateCandidates, parseRss, scoreCandidate, fetchDevToCandidates, fetchStackOverflowCandidates } from '../src/discovery/public-sources.js';
+import { deduplicateCandidates, parseRss, scoreCandidate, fetchDevToCandidates, fetchStackOverflowCandidates, fetchRedditCandidates, fetchXCandidates, fetchGitHubIssueCandidates } from '../src/discovery/public-sources.js';
 import { runDiscovery } from '../src/workers/discovery-worker.js';
 import { UsdtVerifier } from '../src/integrations/usdt-verifier.js';
 import { createDownloadToken, hashDownloadToken, tokenMatches, isTokenExpired } from '../src/delivery/download-token.js';
@@ -52,6 +52,44 @@ test('DEV candidate fetch normalizes public article data and uses valid multiwor
   assert.ok(!requestedUrls.some((url) => url.includes('tag=lateinvoice')));
 });
 
+test('Reddit candidate fetch uses OAuth and preserves public author data', async () => {
+  process.env.REDDIT_ACCESS_TOKEN = 'reddit-test-token';
+  const requested = [];
+  const items = await fetchRedditCandidates({ terms: ['late invoice'], limit: 2, fetchImpl: async (url, options = {}) => {
+    requested.push({ url, options });
+    return { ok: true, status: 200, json: async () => ({ data: { children: [{ data: { id: 'abc', name: 't3_abc', permalink: '/r/freelance/comments/abc/late_invoice/', title: 'Late invoice question', selftext: 'My client has not paid.', author: 'public_author', created_utc: 1787479200 } }] } }) };
+  } });
+  delete process.env.REDDIT_ACCESS_TOKEN;
+  assert.equal(items[0].source, 'reddit');
+  assert.equal(items[0].authorHandle, 'public_author');
+  assert.equal(items[0].sourceUrl, 'https://www.reddit.com/r/freelance/comments/abc/late_invoice/');
+  assert.equal(requested[0].options.headers.Authorization, 'Bearer reddit-test-token');
+});
+
+test('X candidate fetch maps public author expansion and excludes protected accounts', async () => {
+  process.env.X_API_BEARER_TOKEN = 'x-test-token';
+  const items = await fetchXCandidates({ terms: ['late invoice'], limit: 10, fetchImpl: async (url, options = {}) => {
+    assert.ok(url.includes('api.x.com/2/tweets/search/recent'));
+    assert.equal(options.headers.Authorization, 'Bearer x-test-token');
+    return { ok: true, status: 200, json: async () => ({ data: [{ id: '123', text: 'My client has not paid this late invoice.', author_id: 'u1', created_at: '2026-08-23T10:00:00Z' }], includes: { users: [{ id: 'u1', username: 'public_author', protected: false }] } }) };
+  } });
+  delete process.env.X_API_BEARER_TOKEN;
+  assert.equal(items[0].source, 'x');
+  assert.equal(items[0].authorHandle, 'public_author');
+  assert.equal(items[0].sourceUrl, 'https://x.com/public_author/status/123');
+});
+
+test('GitHub issue search maps public issue authors without requiring a credential', async () => {
+  const items = await fetchGitHubIssueCandidates({ terms: ['scope creep'], limit: 10, fetchImpl: async (url, options = {}) => {
+    assert.ok(url.includes('api.github.com/search/issues'));
+    assert.equal(options.headers['User-Agent'], 'client-payment-scope-protection-kit');
+    return { ok: true, status: 200, json: async () => ({ items: [{ id: 44, html_url: 'https://github.com/example/repo/issues/4', title: 'Scope creep problem', body: 'How do I handle extra revisions?', user: { login: 'public_author' }, created_at: '2026-08-23T10:00:00Z' }] }) };
+  } });
+  assert.equal(items[0].source, 'github_issues');
+  assert.equal(items[0].authorHandle, 'public_author');
+  assert.match(items[0].body, /extra revisions/);
+});
+
 test('Stack Exchange candidate fetch uses the public API and preserves matching questions', async () => {
   const requestedUrls = [];
   const items = await fetchStackOverflowCandidates({ terms: ['late invoice'], limit: 2, fetchImpl: async (url) => {
@@ -71,6 +109,7 @@ test('discovery keeps successful sources when one source fails', async () => {
     if (url.includes('hacker-news.firebaseio.com/v0/item/1')) return { ok: true, status: 200, json: async () => ({ type: 'story', id: 1, title: 'Late invoice question', text: 'My client has not paid.', by: 'public-author', time: 1787479200 }) };
     if (url.includes('public.api.bsky.app')) return { ok: true, status: 200, json: async () => ({ posts: [] }) };
     if (url.includes('api.stackexchange.com')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    if (url.includes('api.github.com/search/issues')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
     throw new Error(`unexpected URL: ${url}`);
   };
   const summary = await runDiscovery({ fetchImpl });

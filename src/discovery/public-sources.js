@@ -13,6 +13,19 @@ function matchesTerms(item, terms) {
   return terms.some((term) => haystack.includes(term.toLowerCase()));
 }
 
+function boundedLimit(limit, fallback = 20) {
+  const value = Number(limit);
+  return Number.isInteger(value) && value > 0 ? Math.min(value, 100) : fallback;
+}
+
+export function publicSourceStatus() {
+  return {
+    redditConfigured: Boolean(process.env.REDDIT_ACCESS_TOKEN?.trim() || (process.env.REDDIT_CLIENT_ID?.trim() && process.env.REDDIT_CLIENT_SECRET?.trim())),
+    xConfigured: Boolean((process.env.X_API_BEARER_TOKEN || process.env.X_BEARER_TOKEN)?.trim()),
+    githubConfigured: true
+  };
+}
+
 export async function fetchHackerNewsCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 60 } = {}) {
   const idsResponse = await fetchImpl('https://hacker-news.firebaseio.com/v0/newstories.json');
   if (!idsResponse.ok) throw new Error(`Hacker News IDs request failed: ${idsResponse.status}`);
@@ -40,7 +53,7 @@ export async function fetchDevToCandidates({ fetchImpl = fetch, terms = DEFAULT_
   const results = [];
   const tags = [...new Set(terms.slice(0, 6).flatMap(devTagsForTerm))].slice(0, 12);
   for (const tag of tags) {
-    const url = `https://dev.to/api/articles?tag=${encodeURIComponent(tag)}&per_page=${Math.min(limit, 100)}`;
+    const url = `https://dev.to/api/articles?tag=${encodeURIComponent(tag)}&per_page=${boundedLimit(limit, 20)}`;
     const response = await fetchImpl(url, { headers: { Accept: 'application/json' } });
     if (!response.ok) continue;
     const payload = await response.json();
@@ -65,7 +78,7 @@ export async function fetchStackOverflowCandidates({ fetchImpl = fetch, terms = 
   const failures = [];
   let successfulRequests = 0;
   for (const tag of tags) {
-    const params = new URLSearchParams({ order: 'desc', sort: 'creation', tagged: tag, site: 'stackoverflow', pagesize: String(Math.min(limit, 100)), filter: 'withbody' });
+    const params = new URLSearchParams({ order: 'desc', sort: 'creation', tagged: tag, site: 'stackoverflow', pagesize: String(boundedLimit(limit, 30)), filter: 'withbody' });
     const url = `https://api.stackexchange.com/2.3/search/advanced?${params.toString()}`;
     try {
       const response = await fetchImpl(url, { headers: { Accept: 'application/json' } });
@@ -97,7 +110,7 @@ export async function fetchStackOverflowCandidates({ fetchImpl = fetch, terms = 
 export async function fetchBlueskyCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 25 } = {}) {
   const results = [];
   for (const term of terms.slice(0, 6)) {
-    const url = `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(term)}&limit=${Math.min(limit, 100)}`;
+    const url = `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(term)}&limit=${boundedLimit(limit, 25)}`;
     const response = await fetchImpl(url, { headers: { Accept: 'application/json' } });
     if (!response.ok) continue;
     const payload = await response.json();
@@ -115,6 +128,112 @@ export async function fetchBlueskyCandidates({ fetchImpl = fetch, terms = DEFAUL
     }
   }
   return results.filter((item) => matchesTerms(item, terms));
+}
+
+let redditToken = null;
+let redditTokenExpiresAt = 0;
+
+async function getRedditAccessToken(fetchImpl) {
+  const directToken = process.env.REDDIT_ACCESS_TOKEN?.trim();
+  if (directToken) return directToken;
+  const clientId = process.env.REDDIT_CLIENT_ID?.trim();
+  const clientSecret = process.env.REDDIT_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) return '';
+  if (redditToken && Date.now() < redditTokenExpiresAt) return redditToken;
+  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  const response = await fetchImpl('https://www.reddit.com/api/v1/access_token', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Basic ${basic}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': process.env.REDDIT_USER_AGENT?.trim() || 'client-payment-scope-protection-kit:source-discovery:v1'
+    },
+    body: 'grant_type=client_credentials'
+  });
+  if (!response.ok) throw new Error(`Reddit OAuth request failed: ${response.status}`);
+  const payload = await response.json();
+  redditToken = clean(payload.access_token, 1000);
+  redditTokenExpiresAt = Date.now() + Math.max(60, Number(payload.expires_in || 3600) - 60) * 1000;
+  return redditToken;
+}
+
+export async function fetchRedditCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 25 } = {}) {
+  const token = await getRedditAccessToken(fetchImpl);
+  if (!token) return [];
+  const userAgent = process.env.REDDIT_USER_AGENT?.trim() || 'client-payment-scope-protection-kit:source-discovery:v1';
+  const results = [];
+  for (const term of terms.slice(0, 6)) {
+    const params = new URLSearchParams({ q: term, sort: 'new', t: 'month', limit: String(boundedLimit(limit, 25)), raw_json: '1' });
+    const response = await fetchImpl(`https://oauth.reddit.com/search.json?${params.toString()}`, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'User-Agent': userAgent }
+    });
+    if (!response.ok) throw new Error(`Reddit search request failed: ${response.status}`);
+    const payload = await response.json();
+    for (const child of payload?.data?.children || []) {
+      const post = child?.data || {};
+      if (!post.id || !post.permalink || !post.author) continue;
+      results.push({
+        source: 'reddit',
+        externalId: String(post.name || `t3_${post.id}`),
+        sourceUrl: `https://www.reddit.com${post.permalink}`,
+        title: clean(post.title),
+        body: clean(post.selftext || post.title),
+        authorHandle: clean(post.author, 120),
+        publishedAt: post.created_utc ? new Date(post.created_utc * 1000).toISOString() : null
+      });
+    }
+  }
+  return results.filter((item) => matchesTerms(item, terms));
+}
+
+export async function fetchXCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 25 } = {}) {
+  const token = (process.env.X_API_BEARER_TOKEN || process.env.X_BEARER_TOKEN)?.trim();
+  if (!token) return [];
+  const queryTerms = terms.slice(0, 8).map((term) => `"${String(term).replace(/"/g, '')}"`);
+  const params = new URLSearchParams({
+    query: `(${queryTerms.join(' OR ')}) lang:en -is:retweet`,
+    max_results: String(Math.max(10, Math.min(boundedLimit(limit, 25), 100))),
+    'tweet.fields': 'created_at,lang,author_id,text',
+    expansions: 'author_id',
+    'user.fields': 'username,name,protected'
+  });
+  const response = await fetchImpl(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
+    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
+  });
+  if (!response.ok) throw new Error(`X recent search request failed: ${response.status}`);
+  const payload = await response.json();
+  const users = new Map((payload.includes?.users || []).map((user) => [String(user.id), user]));
+  return (payload.data || []).map((post) => {
+    const user = users.get(String(post.author_id));
+    return {
+      source: 'x',
+      externalId: String(post.id),
+      sourceUrl: user?.username ? `https://x.com/${user.username}/status/${post.id}` : `https://x.com/i/web/status/${post.id}`,
+      title: '',
+      body: clean(post.text),
+      authorHandle: clean(user?.username, 120),
+      publishedAt: post.created_at || null,
+      protectedAuthor: Boolean(user?.protected)
+    };
+  }).filter((item) => item.authorHandle && !item.protectedAuthor && matchesTerms(item, terms));
+}
+
+export async function fetchGitHubIssueCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 25 } = {}) {
+  const query = `(${terms.slice(0, 8).map((term) => `"${String(term).replace(/"/g, '')}"`).join(' OR ')}) in:title,body type:issue state:open`;
+  const params = new URLSearchParams({ q: query, sort: 'created', order: 'desc', per_page: String(boundedLimit(limit, 25)) });
+  const response = await fetchImpl(`https://api.github.com/search/issues?${params.toString()}`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'client-payment-scope-protection-kit' } });
+  if (!response.ok) throw new Error(`GitHub issue search request failed: ${response.status}`);
+  const payload = await response.json();
+  return (payload.items || []).map((issue) => ({
+    source: 'github_issues',
+    externalId: String(issue.id || issue.node_id || issue.html_url),
+    sourceUrl: issue.html_url,
+    title: clean(issue.title),
+    body: clean(issue.body || issue.title),
+    authorHandle: clean(issue.user?.login, 120),
+    publishedAt: issue.created_at || null
+  })).filter((item) => matchesTerms(item, terms));
 }
 
 export function parseRss(xml, { source = 'rss', baseUrl = '' } = {}) {

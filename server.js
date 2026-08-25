@@ -15,6 +15,7 @@ import { TelegramBot } from './src/integrations/telegram-bot.js';
 import { ResendProvider } from './src/integrations/resend-provider.js';
 import { SolanaRpcProvider, isValidSolanaAddress, solanaConstants } from './src/integrations/solana-rpc-provider.js';
 import { UsdtVerifier } from './src/integrations/usdt-verifier.js';
+import { publicSourceStatus } from './src/discovery/public-sources.js';
 import { requireAdmin } from './src/auth/admin-auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -387,7 +388,8 @@ app.get('/api/health', (_req, res) => {
     usdtConfigured: solanaRpcProvider.configured && usdtVerifier.configured && paymentConfig().valid,
     paymentConfigurationValid: paymentConfig().valid,
     cronTriggerConfigured: Boolean(process.env.CRON_TRIGGER_SECRET?.trim()),
-    usdtMinConfirmations: paymentConfig().minConfirmations
+    usdtMinConfirmations: paymentConfig().minConfirmations,
+    publicSources: publicSourceStatus()
   });
 });
 

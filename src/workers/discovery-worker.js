@@ -2,7 +2,7 @@ import 'dotenv/config';
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import pg from 'pg';
-import { fetchHackerNewsCandidates, fetchBlueskyCandidates, fetchDevToCandidates, fetchStackOverflowCandidates, deduplicateCandidates } from '../discovery/public-sources.js';
+import { fetchHackerNewsCandidates, fetchBlueskyCandidates, fetchDevToCandidates, fetchStackOverflowCandidates, fetchRedditCandidates, fetchXCandidates, fetchGitHubIssueCandidates, publicSourceStatus, deduplicateCandidates } from '../discovery/public-sources.js';
 
 const configuredSupabaseValue = process.env.SUPABASE_URL?.trim() || '';
 const supabaseUrl = configuredSupabaseValue.startsWith('http://') || configuredSupabaseValue.startsWith('https://') ? configuredSupabaseValue : '';
@@ -72,22 +72,26 @@ export async function closeDiscoveryWorker() {
 }
 
 export async function runDiscovery({ fetchImpl = fetch } = {}) {
+  const configured = publicSourceStatus();
   const sourceTasks = [
-    ['hacker_news', () => fetchHackerNewsCandidates({ fetchImpl, limit: 40 })],
-    ['bluesky', () => fetchBlueskyCandidates({ fetchImpl, limit: 12 })],
-    ['dev_to', () => fetchDevToCandidates({ fetchImpl, limit: 10 })],
-    ['stack_overflow', () => fetchStackOverflowCandidates({ fetchImpl })]
+    ['hacker_news', () => fetchHackerNewsCandidates({ fetchImpl, limit: 40 }), true],
+    ['bluesky', () => fetchBlueskyCandidates({ fetchImpl, limit: 12 }), true],
+    ['dev_to', () => fetchDevToCandidates({ fetchImpl, limit: 10 }), true],
+    ['stack_overflow', () => fetchStackOverflowCandidates({ fetchImpl }), true],
+    ['reddit', () => fetchRedditCandidates({ fetchImpl, limit: 12 }), configured.redditConfigured],
+    ['x', () => fetchXCandidates({ fetchImpl, limit: 25 }), configured.xConfigured],
+    ['github_issues', () => fetchGitHubIssueCandidates({ fetchImpl, limit: 25 }), configured.githubConfigured]
   ];
   const settled = await Promise.allSettled(sourceTasks.map(([, task]) => task()));
   const sources = {};
   const allItems = [];
   settled.forEach((result, index) => {
-    const [source] = sourceTasks[index];
+    const [source, , isConfigured] = sourceTasks[index];
     if (result.status === 'fulfilled') {
-      sources[source] = { mode: 'ok', discovered: result.value.length };
+      sources[source] = { mode: isConfigured ? 'ok' : 'disabled', configured: isConfigured, discovered: result.value.length };
       allItems.push(...result.value);
     } else {
-      sources[source] = { mode: 'error', error: String(result.reason?.message || result.reason).slice(0, 500) };
+      sources[source] = { mode: 'error', configured: isConfigured, error: String(result.reason?.message || result.reason).slice(0, 500) };
     }
   });
   const failedSources = Object.entries(sources).filter(([, result]) => result.mode === 'error').map(([source]) => source);

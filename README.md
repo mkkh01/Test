@@ -11,7 +11,7 @@ A small, English-first digital product storefront for the **Client Payment & Sco
 - Private-by-default database permissions with Row Level Security and server-side service-role access only.
 - Solana JSON-RPC USDT-SPL verification provider, protected customer status token, transaction-signature submission, atomic payment state transitions, secure download release, and admin payment review endpoints.
 - Gemini, Telegram, and USDT integration modules remain server-side; no real credentials are committed to the repository.
-- Public-source discovery adapters for Hacker News, Bluesky, and RSS are present, with queue-backed lead analysis and Render worker/Cron entrypoints.
+- Public-source discovery adapters for Hacker News, Bluesky, DEV, Stack Exchange, Reddit, X Recent Search, and GitHub Issues are present, with queue-backed lead analysis and Render/GitHub Actions entrypoints. Reddit and X remain disabled until their optional credentials are added.
 
 ## Local development
 
@@ -47,6 +47,8 @@ Required later integrations:
 - `SOLANA_COMMITMENT` (confirmed or finalized)
 - `TELEGRAM_WEBHOOK_SECRET`
 - `PUBLIC_BASE_URL`
+- Optional `REDDIT_ACCESS_TOKEN` or `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET`, plus a descriptive `REDDIT_USER_AGENT`
+- Optional `X_API_BEARER_TOKEN` for X Recent Search
 
 The five Gemini keys are for reliability and controlled rotation, not for bypassing provider quotas or terms. The application will record key health, apply per-key limits, and stop or fall back to deterministic rules when no key is available.
 
@@ -64,8 +66,8 @@ The customer creates an order and receives a customer-scoped status token. The s
 - `src/integrations/telegram-bot.js` provides webhook and message helpers while remaining disabled without `TELEGRAM_BOT_TOKEN`.
 - `src/integrations/usdt-verifier.js` validates invoice data and transaction results through the Solana provider; it never handles a private key.
 - `src/integrations/solana-rpc-provider.js` reads finalized Solana transactions and SPL token balance changes through JSON-RPC; it requires no signing key.
-- `src/discovery/public-sources.js` includes public Hacker News, Bluesky, and RSS candidate collectors with keyword filtering, deduplication, and a deterministic fit score.
-- `src/workers/discovery-worker.js` collects candidates and queues lead-analysis jobs in Supabase; it runs in dry-run mode when Supabase server credentials are absent.
+- `src/discovery/public-sources.js` includes public Hacker News, Bluesky, DEV, Stack Exchange, Reddit, X Recent Search, and GitHub Issues collectors with keyword filtering, public-author mapping, deduplication, and a deterministic fit score.
+- `src/workers/discovery-worker.js` collects candidates and queues lead-analysis jobs in Supabase; each source is isolated, and disabled or failed sources do not stop successful sources.
 
 Real production credentials remain in Render only. The provider and webhook code are tested with injected adapters locally; live payment acceptance should be tested first with a small controlled transaction.
 
@@ -90,10 +92,10 @@ The payment module verifies a successful transaction, correct network, correct t
 ## Lead discovery flow
 
 ```text
-Approved public sources → deduplicate → keyword/rule filter → Gemini analysis → lead score → message draft → policy checks → approved channel
+Approved public sources → deduplicate → keyword/rule filter → public account + post URL → Gemini analysis → lead score → English message draft → human review → manual send by owner
 ```
 
-The discovery worker will not scrape private data, bypass CAPTCHAs, create fake accounts, or send uncontrolled bulk messages. Source connectors will be enabled only after confirming their official capabilities and terms.
+Each lead record shows the public platform, account handle, source post URL, problem excerpt, fit score, recommended kit, and a short English draft. The system does not claim to know a private email address or purchase intent. It will not scrape private data, bypass CAPTCHAs, create fake accounts, send direct messages, publish replies, or send uncontrolled bulk messages. Reddit uses OAuth and a descriptive User-Agent when configured; X uses the official Recent Search endpoint and only returns public, unprotected authors. Source connectors are enabled only after confirming their official capabilities and terms.
 
 ## Quality and security principles
 
