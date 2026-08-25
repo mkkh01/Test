@@ -30,7 +30,8 @@ function rpcTransaction({ amount = '7000000', owner = receivingAddress, mint = t
       ]
     },
     transaction: { message: { accountKeys: ['SenderToken11111111111111111111111111111111', 'ReceiverToken1111111111111111111111111111111'] }, signatures: [txid] },
-    version: finalized ? 0 : 0
+    version: finalized ? 0 : 0,
+    blockTime: 1700000000
   };
 }
 
@@ -60,6 +61,7 @@ test('simulation confirms an exact USDT SPL payment after finalization', async (
   assert.equal(result.transaction.amountUsdt, 7);
   assert.equal(result.transaction.confirmations, 1);
   assert.equal(result.transaction.tokenContract, tokenMint);
+  assert.equal(result.transaction.blockTime, 1700000000);
 });
 
 test('simulation keeps a non-finalized Solana payment in confirming state', async () => {

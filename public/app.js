@@ -14,6 +14,11 @@ const txidForm = document.getElementById('txidForm');
 const paymentTxid = document.getElementById('paymentTxid');
 const paymentStatus = document.getElementById('paymentStatus');
 const evidenceForm = document.getElementById('evidenceForm');
+const paymentEvidenceTxid = document.getElementById('paymentEvidenceTxid');
+const paymentSenderAddress = document.getElementById('paymentSenderAddress');
+const paymentRecipientAddress = document.getElementById('paymentRecipientAddress');
+const paymentTransferAmount = document.getElementById('paymentTransferAmount');
+const paymentTransferTime = document.getElementById('paymentTransferTime');
 const paymentTransferText = document.getElementById('paymentTransferText');
 const paymentScreenshot = document.getElementById('paymentScreenshot');
 const evidenceStatus = document.getElementById('evidenceStatus');
@@ -113,6 +118,9 @@ async function fileToDataUrl(file) {
 function showEvidencePanel(result = {}) {
   if (!evidenceForm) return;
   if (activeOrder?.orderNumber) activeOrder = { ...activeOrder, ...result, submitEvidenceUrl: result.submitEvidenceUrl || `/api/orders/${encodeURIComponent(activeOrder.orderNumber)}/payment-evidence` };
+  if (paymentEvidenceTxid && !paymentEvidenceTxid.value) paymentEvidenceTxid.value = paymentTxid?.value.trim() || '';
+  if (paymentRecipientAddress && !paymentRecipientAddress.value) paymentRecipientAddress.value = activeOrder?.receivingAddress || '';
+  if (paymentTransferAmount && !paymentTransferAmount.value) paymentTransferAmount.value = activeOrder?.amountUsdt || '';
   evidenceForm.classList.remove('hidden');
   setStatus(evidenceStatus, 'You can now submit the transfer details or a screenshot for manual review.', '#b26a00');
   evidenceForm.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -195,7 +203,7 @@ txidForm?.addEventListener('submit', async (event) => {
 evidenceForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (!activeOrder?.statusToken || !activeOrder.submitEvidenceUrl) {
-    setStatus(evidenceStatus, 'Submit two unsuccessful TxID checks first.', '#b42318');
+    setStatus(evidenceStatus, 'Submit one unsuccessful TxID check first.', '#b42318');
     return;
   }
   setStatus(evidenceStatus, 'Submitting your evidence securely…');
@@ -204,9 +212,24 @@ evidenceForm?.addEventListener('submit', async (event) => {
     const response = await fetch(activeOrder.submitEvidenceUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ statusToken: activeOrder.statusToken, transferText: paymentTransferText?.value.trim() || '', screenshotDataUrl: screenshot })
+      body: JSON.stringify({
+        statusToken: activeOrder.statusToken,
+        txid: paymentEvidenceTxid?.value.trim() || '',
+        senderAddress: paymentSenderAddress?.value.trim() || '',
+        recipientAddress: paymentRecipientAddress?.value.trim() || '',
+        amountUsdt: paymentTransferAmount?.value || '',
+        transferTime: paymentTransferTime?.value || '',
+        transferText: paymentTransferText?.value.trim() || '',
+        screenshotDataUrl: screenshot
+      })
     });
     const result = await response.json();
+    if (result.status === 'confirmed' && result.order?.downloadUrl) {
+      activeOrder = { ...activeOrder, ...result.order };
+      setStatus(evidenceStatus, 'Payment confirmed. Your download is starting.', '#0d8b65');
+      renderDownload(result.order);
+      return;
+    }
     if (!response.ok) throw new Error(result.error || 'Unable to submit the evidence.');
     setStatus(evidenceStatus, result.message || 'Evidence received. We will review it before releasing the kit.', '#0d8b65');
     evidenceForm.querySelector('button[type="submit"]')?.setAttribute('disabled', 'disabled');

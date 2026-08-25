@@ -60,8 +60,8 @@ async function processJob(job) {
     await markJob(job.id, 'succeeded', { error: 'Orphaned payment job skipped.' });
     return { jobId: job.id, status: 'orphaned' };
   }
-  if (order.status === 'paid' || order.status === 'expired' || order.status === 'cancelled') {
-    await markJob(job.id, 'succeeded', { error: `Order already ${order.status}.` });
+  if (order.status === 'paid' || order.status === 'expired' || order.status === 'cancelled' || order.status === 'manual_review') {
+    await markJob(job.id, 'succeeded', { error: `Order already ${order.status}; automatic worker review skipped.` });
     return { jobId: job.id, status: order.status };
   }
   if (new Date(order.expires_at).getTime() <= Date.now()) {

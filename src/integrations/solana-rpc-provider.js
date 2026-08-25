@@ -204,6 +204,7 @@ export class SolanaRpcProvider {
       pending: false,
       finalized,
       slot: Number(result.slot) || null,
+      blockTime: Number.isFinite(Number(result.blockTime)) ? Number(result.blockTime) : null,
       signatureFound: signatures.includes(cleanTxid),
       raw: { result }
     };

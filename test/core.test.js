@@ -129,6 +129,7 @@ test('Solana provider normalizes a confirmed USDT SPL transfer', async () => {
       assert.equal(request.method, 'getTransaction');
       return { ok: true, status: 200, json: async () => ({ result: {
         slot: 100,
+        blockTime: 1700000000,
         meta: {
           err: null,
           preTokenBalances: [
@@ -152,6 +153,7 @@ test('Solana provider normalizes a confirmed USDT SPL transfer', async () => {
   assert.equal(result.confirmations, 1);
   assert.equal(result.finalized, true);
   assert.equal(result.success, true);
+  assert.equal(result.blockTime, 1700000000);
 });
 
 test('Gemini router rotates after a rate-limited key', async () => {
