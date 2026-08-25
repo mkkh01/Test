@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deduplicateCandidates, parseRss, scoreCandidate, fetchDevToCandidates } from '../src/discovery/public-sources.js';
+import { deduplicateCandidates, parseRss, scoreCandidate, fetchDevToCandidates, fetchStackOverflowCandidates } from '../src/discovery/public-sources.js';
+import { runDiscovery } from '../src/workers/discovery-worker.js';
 import { UsdtVerifier } from '../src/integrations/usdt-verifier.js';
 import { createDownloadToken, hashDownloadToken, tokenMatches, isTokenExpired } from '../src/delivery/download-token.js';
 import { GeminiRouter } from '../src/integrations/gemini-router.js';
@@ -49,6 +50,34 @@ test('DEV candidate fetch normalizes public article data and uses valid multiwor
   assert.equal(items[0].authorHandle, 'public-author');
   assert.ok(requestedUrls.some((url) => url.includes('tag=late-invoice')));
   assert.ok(!requestedUrls.some((url) => url.includes('tag=lateinvoice')));
+});
+
+test('Stack Exchange candidate fetch uses the public API and preserves matching questions', async () => {
+  const requestedUrls = [];
+  const items = await fetchStackOverflowCandidates({ terms: ['late invoice'], limit: 2, fetchImpl: async (url) => {
+    requestedUrls.push(url);
+    return { ok: true, status: 200, json: async () => ({ items: [{ question_id: 123, link: 'https://stackoverflow.com/q/123', title: 'Late invoice question', body: '<p>My client has not paid.</p>', creation_date: 1787479200, owner: { display_name: 'public-author' } }] }) };
+  } });
+  assert.equal(items[0].source, 'stack_overflow');
+  assert.equal(items[0].sourceUrl, 'https://stackoverflow.com/q/123');
+  assert.match(items[0].body, /client has not paid/);
+  assert.ok(requestedUrls.every((url) => url.includes('api.stackexchange.com/2.3/search/advanced')));
+});
+
+test('discovery keeps successful sources when one source fails', async () => {
+  const fetchImpl = async (url) => {
+    if (url.includes('dev.to')) throw new Error('DEV temporary failure');
+    if (url.includes('hacker-news.firebaseio.com/v0/newstories')) return { ok: true, status: 200, json: async () => [1] };
+    if (url.includes('hacker-news.firebaseio.com/v0/item/1')) return { ok: true, status: 200, json: async () => ({ type: 'story', id: 1, title: 'Late invoice question', text: 'My client has not paid.', by: 'public-author', time: 1787479200 }) };
+    if (url.includes('public.api.bsky.app')) return { ok: true, status: 200, json: async () => ({ posts: [] }) };
+    if (url.includes('api.stackexchange.com')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    throw new Error(`unexpected URL: ${url}`);
+  };
+  const summary = await runDiscovery({ fetchImpl });
+  assert.equal(summary.mode, 'partial');
+  assert.deepEqual(summary.failedSources, ['dev_to']);
+  assert.equal(summary.sources.hacker_news.mode, 'ok');
+  assert.ok(summary.discovered >= 1);
 });
 
 test('payment configuration accepts Solana addresses and rejects TRON addresses', () => {

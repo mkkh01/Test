@@ -59,12 +59,39 @@ export async function fetchDevToCandidates({ fetchImpl = fetch, terms = DEFAULT_
   return results.filter((item) => matchesTerms(item, terms));
 }
 
-export async function fetchStackOverflowCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS } = {}) {
-  const tags = ['freelancing', 'freelance', 'small-business'];
-  const feedUrl = `https://stackoverflow.com/feeds/tag?tagnames=${encodeURIComponent(tags.join(';'))}&sort=newest`;
-  const response = await fetchImpl(feedUrl, { headers: { Accept: 'application/atom+xml, application/xml, text/xml' } });
-  if (!response.ok) throw new Error(`Stack Overflow feed request failed: ${response.status}`);
-  return parseRss(await response.text(), { source: 'stack_overflow', baseUrl: feedUrl }).filter((item) => matchesTerms(item, terms));
+export async function fetchStackOverflowCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 30 } = {}) {
+  const tags = ['contracts', 'invoicing', 'freelancing', 'freelance', 'small-business'];
+  const results = [];
+  const failures = [];
+  let successfulRequests = 0;
+  for (const tag of tags) {
+    const params = new URLSearchParams({ order: 'desc', sort: 'creation', tagged: tag, site: 'stackoverflow', pagesize: String(Math.min(limit, 100)), filter: 'withbody' });
+    const url = `https://api.stackexchange.com/2.3/search/advanced?${params.toString()}`;
+    try {
+      const response = await fetchImpl(url, { headers: { Accept: 'application/json' } });
+      if (!response.ok) {
+        failures.push(`${tag}:${response.status}`);
+        continue;
+      }
+      successfulRequests += 1;
+      const payload = await response.json();
+      for (const question of payload.items || []) {
+        results.push({
+          source: 'stack_overflow',
+          externalId: String(question.question_id || question.link),
+          sourceUrl: question.link,
+          title: clean(question.title),
+          body: clean(question.body || question.title),
+          authorHandle: clean(question.owner?.display_name, 120),
+          publishedAt: question.creation_date ? new Date(question.creation_date * 1000).toISOString() : null
+        });
+      }
+    } catch (error) {
+      failures.push(`${tag}:${String(error.message).slice(0, 120)}`);
+    }
+  }
+  if (!successfulRequests && failures.length) throw new Error(`Stack Exchange API requests failed: ${failures.join(', ')}`);
+  return results.filter((item) => matchesTerms(item, terms));
 }
 
 export async function fetchBlueskyCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 25 } = {}) {

@@ -135,6 +135,19 @@ async function githubActionsAuthorized(req) {
 }
 
 let cronRunning = false;
+let lastCronRun = { runId: null, status: 'idle', startedAt: null, finishedAt: null, exitCode: null, summary: null };
+
+function parseCronSummary(stdout) {
+  const lines = String(stdout || '').trim().split(/\r?\n/).reverse();
+  const jsonLine = lines.find((line) => line.trim().startsWith('{'));
+  if (!jsonLine) return null;
+  try {
+    const parsed = JSON.parse(jsonLine);
+    return parsed.summary || parsed;
+  } catch {
+    return null;
+  }
+}
 
 function runCronChild() {
   return new Promise((resolve) => {
@@ -1039,19 +1052,30 @@ app.post('/api/intake', rateLimit('intake-submit', 6, 60 * 60 * 1000), async (re
 
 const handleCronTrigger = async (req, res) => {
   if (!cronAuthorized(req) && !(await githubActionsAuthorized(req))) return res.status(401).json({ ok: false, error: 'Unauthorized cron trigger.' });
-  if (cronRunning) return res.status(409).json({ ok: false, status: 'already_running' });
+  if (cronRunning) return res.status(409).json({ ok: false, status: 'already_running', runId: lastCronRun.runId });
+  const runId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
   cronRunning = true;
-  res.status(202).json({ ok: true, status: 'started', message: 'Cron cycle started. Check service logs for its summary.' });
+  lastCronRun = { runId, status: 'running', startedAt, finishedAt: null, exitCode: null, summary: null };
+  res.status(202).json({ ok: true, status: 'started', runId, message: 'Cron cycle started. Check /api/internal/cron/status for its result.' });
   try {
     const result = await runCronChild();
-    console.log(JSON.stringify({ worker: 'cron-trigger', exitCode: result.code, stdout: result.stdout, stderr: result.stderr }));
+    const summary = parseCronSummary(result.stdout);
+    lastCronRun = { runId, status: result.code === 0 ? 'completed' : 'failed', startedAt, finishedAt: new Date().toISOString(), exitCode: result.code, summary };
+    console.log(JSON.stringify({ worker: 'cron-trigger', runId, exitCode: result.code, summary, stderr: result.stderr }));
   } finally {
     cronRunning = false;
   }
 };
 
+const handleCronStatus = async (req, res) => {
+  if (!cronAuthorized(req) && !(await githubActionsAuthorized(req))) return res.status(401).json({ ok: false, error: 'Unauthorized cron trigger.' });
+  return res.json({ ok: true, running: cronRunning, lastRun: lastCronRun });
+};
+
 app.post('/api/internal/cron/run', handleCronTrigger);
 app.get('/api/internal/cron/run', handleCronTrigger);
+app.get('/api/internal/cron/status', handleCronStatus);
 
 app.use((_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 

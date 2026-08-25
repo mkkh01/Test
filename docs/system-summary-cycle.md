@@ -72,21 +72,21 @@ flowchart TD
 
 ## الدورة الخامسة: اكتشاف العملاء والمسودات
 
-يستخدم `discovery-worker.js` مصادر عامة فقط: Hacker News وBluesky وDEV Community وStack Overflow public feed. العناصر تُحفظ في `source_items` مع deduplication، ثم تُنشأ وظائف تحليل في `jobs`. يقوم `lead-analysis-worker.js` بإرسال النص العام إلى Gemini ويخزن النتيجة في `leads` و`lead_analyses` و`outreach_messages`.
+يستخدم `discovery-worker.js` مصادر عامة فقط: Hacker News وBluesky وDEV Community وStack Exchange API العام. العناصر تُحفظ في `source_items` مع deduplication، ثم تُنشأ وظائف تحليل في `jobs`. يقوم `lead-analysis-worker.js` بإرسال النص العام إلى Gemini ويخزن النتيجة في `leads` و`lead_analyses` و`outreach_messages`.
 
 النتيجة الطبيعية لهذه الدورة هي **مسودة** لا رسالة مرسلة. كل مسودة يجب أن تحمل `approval_required=true` و`needs_human_review=true`. لوحة `/admin.html` تعرض المصدر والدليل والنتيجة والمسودة والبريد العام وحالة الرسالة وحالة البيع. الموافقة الفردية تحتاج بريدًا عامًا وموافقة صريحة، وتنتج رسالة queued مع سجل تدقيق.
 
-هناك ملاحظة جودة في جامع DEV: تحويل عبارات متعددة الكلمات إلى tags مباشرة مثل `lateinvoice` قد يقلل النتائج المفيدة، لأن الوسم في DEV قد يكون `late-invoice` أو موضوعًا مختلفًا. هذه مشكلة جودة اكتشاف وليست مشكلة أمان، وتحتاج تحسين normalization أو استخدام بحث API مناسب.
+تمت معالجة ملاحظة جودة جامع DEV: العبارات متعددة الكلمات تُحوّل الآن إلى tags مثل `late-invoice` مع استمرار الفلترة النصية النهائية.
 
 ## الدورة السادسة: Cron والعمال
 
 المسار المحمي هو `POST /api/internal/cron/run` مع Bearer secret. يقوم بتشغيل دورة واحدة بالتسلسل: discovery ثم Gemini lead analysis ثم payment worker ثم outreach worker. توجد حماية من التشغيل المتزامن، وتعيد الخدمة `409` إذا كانت دورة سابقة تعمل.
 
-اختيار المشروع الحالي هو external cron كل 30 دقيقة، لأن المستخدم اختار إبقاء Render Web Service على الخطة المجانية. وجود `cronTriggerConfigured=true` يعني أن السر موجود في بيئة الخدمة، لكنه **لا يثبت** أن موقع Cron خارجيًا أنشأ جدولًا فعليًا أو نجح في استدعاء endpoint. لم يتم استدعاء endpoint المحمي في هذه المراجعة، حتى لا تُشغّل مصادر عامة أو Gemini أو queue حقيقية دون طلب منفصل.
+البديل الحالي هو GitHub Actions كل 30 دقيقة، لأن المستخدم اختار إبقاء Render Web Service على الخطة المجانية. workflow في `.github/workflows/lead-discovery-cycle.yml` يستدعي endpoint المحمي باستخدام `GITHUB_TOKEN` ويتحقق الخادم من مستودع `mkkh01/Test`. وجود `cronTriggerConfigured=true` يظل دعمًا لتفويض Bearer القديم، وليس دليلًا على ضرورة cron-job.org.
 
 | الخيار | حالته | الملاحظة |
 |---|---|---|
-| External Cron كل 30 دقيقة | الخيار المختار | يحتاج إنشاء الجدول خارجيًا والتحقق من أول تشغيل بموافقة منفصلة |
+| GitHub Actions كل 30 دقيقة | الخيار الحالي | workflow مرفوع، وشُغّل اختبار يدوي ناجح؛ تُراجع دورية التشغيل من Actions |
 | Render Cron / Background Worker | غير منشأ | يحتاج خدمة مدفوعة أو إعدادًا مختلفًا؛ لم يتم إنشاؤه |
 
 عامل outreach لا يعمل إلا عندما تكون `OUTREACH_SEND_ENABLED=true`، ويحتاج sender domain موثقًا، ويعالج رسالة approved واحدة كحد أقصى مع gap زمني، ويفرض opt-out وblocked guards. في الحالة الحالية الإرسال البارد غير مفعّل، وهذا صحيح.
@@ -107,7 +107,7 @@ flowchart TD
 | الرسائل | `outreach_messages` | draft/approved/queued/sent مع idempotency |
 | التشغيل | `jobs`, `audit_logs` | queue وقفل الوظائف وسجل الأحداث |
 
-الهجرات الأساسية هي `001_initial_schema.sql`، و`004_lead_outreach_controls.sql`، و`005_outreach_message_timestamps.sql`. الجداول الخاصة محمية بحيث لا يقرأها المتصفح مباشرة؛ الوصول التشغيلي يمر من الخادم. توجد فهارس للحالات والـqueue والـdedupe، كما توجد قيود للحالات ومقدار المبلغ وعدد المحاولات وحالات الموافقة.
+الهجرات الأساسية هي `001_initial_schema.sql`، و`004_lead_outreach_controls.sql`، و`005_outreach_message_timestamps.sql`، و`006_set_final_product_prices.sql`، و`007_resend_webhook_idempotency.sql`. الجداول الخاصة محمية بحيث لا يقرأها المتصفح مباشرة؛ الوصول التشغيلي يمر من الخادم. توجد فهارس للحالات والـqueue والـdedupe، كما توجد قيود للحالات ومقدار المبلغ وعدد المحاولات وحالات الموافقة.
 
 ## مصفوفة الصحة الحالية
 
@@ -120,12 +120,12 @@ flowchart TD
 | Payment configuration | `true` | لا تُنتج فاتورة شبكة خاطئة |
 | Email configured | `true` | المزود مهيأ، وليس ضمان Inbox |
 | Gemini key count | `5` | خمسة مفاتيح موجودة؛ لا يعني نجاح كل مفتاح الآن |
-| Cron trigger configured | `true` | السر موجود، والجدول الخارجي غير مثبت |
+| Cron trigger configured | `true` | تفويض Bearer موجود، وGitHub Actions workflow مرفوع |
 | Minimum confirmations | `1` | الحد الحالي للتأكيدات |
 
 ## الأدلة والاختبارات
 
-الاختبارات الآلية الأخيرة نجحت **27/27**، وتشمل فحص syntax للخادم والتكاملات والعمال، والتحقق من عنوان Solana، ورفض TRC20، ومحاكاة USDT-SPL، وحالات الدفع الناقص والخاطئ، وResend test mode، وتدوير مفاتيح Gemini، وسلوك Telegram وdownload tokens.
+الاختبارات الآلية الأخيرة نجحت **30/30**، وتشمل فحص syntax للخادم والتكاملات والعمال، والتحقق من عنوان Solana، ورفض TRC20، ومحاكاة USDT-SPL، وحالات الدفع الناقص والخاطئ، وResend test mode، وتدوير مفاتيح Gemini، وسلوك Telegram وdownload tokens.
 
 تم فحص الخدمة الحية بعد آخر نشر، وكانت مؤشرات الدفع الأربعة الأساسية صحيحة. كما تم إرسال طلب اختبار Complete بقيمة 7 USDT إلى endpoint إنشاء الطلب، وأعاد الخادم `SOLANA_SPL` وعنوان Solana صالحًا ومبلغ 7 USDT. هذا الطلب لم يُدفع ولم ينتج عنه بريد؛ وهو محفوظ كسجل اختبار.
 
@@ -134,37 +134,37 @@ flowchart TD
 | الأسعار الحية 5/7/10 | نعم | استجابة `/api/products` |
 | إنشاء فاتورة Solana | نعم | طلب اختبار حي غير مدفوع |
 | رفض عنوان TRON في الإعداد | نعم | اختبار محلي وfail-closed |
-| محاكاة verifier | نعم | 27/27 اختبارًا |
+| محاكاة verifier | نعم | 30/30 اختبارًا |
 | Mainnet end-to-end بمبلغ حقيقي | لا | لم يُنفذ عمدًا |
 | وصول ZIP بعد دفع حقيقي | لا | يحتاج عملية شراء حقيقية |
-| Cron خارجي كل 30 دقيقة | لا | الإعداد الخارجي غير مثبت |
+| GitHub Actions كل 30 دقيقة | جزئيًا | workflow موجود، وشُغّل اختبار يدوي ناجح؛ يجب متابعة التشغيل المجدول |
 | إرسال lead حقيقي | لا | محظور عمدًا حتى نطاق موثق وموافقة منفصلة |
-| webhook للارتداد/الشكوى/الرد | لا | غير مبني بعد |
+| webhook للارتداد/الشكوى/الرد | جزئيًا | الكود والمigration موجودان؛ يحتاج تسجيل Resend الخارجي والـsecret |
 
 ## المشكلات المخفية مرتبة
 
 | الأولوية | المشكلة | الأثر | الإجراء المقترح |
 |---|---|---|---|
 | Blocker للإطلاق المالي الكامل | لا يوجد Mainnet end-to-end حقيقي | لا يمكن ضمان دورة شراء حقيقية دون اختبار مضبوط | إجراء اختبار صغير بموافقة منفصلة، لا أثناء المراجعة |
-| High | seed الأسعار في migration 001 قديم 3/7/12 | إعادة بناء قاعدة جديدة قد تعيد الأسعار الخطأ | إنشاء migration 006 لتثبيت 5/7/10 بعد موافقة تشغيلية |
-| High | لا توجد Resend webhooks للـbounce/complaint/reply | رسالة “Stop” لن توقف الإرسال تلقائيًا | بناء webhook وتحديث opt-out تلقائيًا قبل أي outreach حقيقي |
-| High | لا يوجد Cron خارجي مثبت بالدليل | الاكتشاف والتحليل قد لا يعملان دوريًا | إنشاء جدول خارجي 30 دقيقة ثم اختبار دورة واحدة منفصلًا |
+| High | seed الأسعار في migration 001 قديم 3/7/12 | إعادة بناء قاعدة جديدة قد تعيد الأسعار الخطأ | تم تطبيق migration 006 لتثبيت 5/7/10 |
+| High | Resend webhook يحتاج تسجيلًا خارجيًا | بدون التسجيل لن تصل أحداث bounce/complaint/reply | الكود جاهز؛ يجب إكمال التسجيل والـsecret قبل outreach حقيقي |
+| High | دورية GitHub Actions تحتاج متابعة | قد يتأخر scheduled workflow رغم نجاح الاختبار اليدوي | متابعة سجل Actions؛ workflow مرفوع ويعمل يدويًا |
 | High | لا يوجد نطاق إرسال موثق | outreach الحقيقي سيظل محظورًا أو منخفض الثقة | نطاق مملوك مع SPF/DKIM/DMARC؛ لا مزود يضمن Inbox |
 | Medium | admin token ثابت وبدون rate limit مخصص قوي | نقطة إدارة حساسة تحتاج تقوية | إضافة session/admin auth أو rate limit مستقل وسجل محاولات |
-| Medium | جامع DEV متعدد الكلمات منخفض الجودة | نتائج أقل أو غير دقيقة | تحسين tags والبحث والـnormalization |
+| Medium | جودة DEV | كانت العبارات متعددة الكلمات تُرسل كـtag غير صحيح | تم إصلاح normalization وإضافة اختبار |
 | Medium | `server.js` كبير ومتكامل المسؤوليات | صعوبة الصيانة والاختبار | تقسيم routes/config/workers تدريجيًا |
-| Medium | لا يوجد سجل موحد لكل رسائل sample | التدقيق على رسائل العملاء أضعف | تسجيل outbound sample في audit log مع recipient وprovider status |
+| Medium | سجل رسائل sample | كان التدقيق ناقصًا | تم تسجيل حالة المحاولة ورقم رسالة المزود دون تخزين الأسرار |
 | Security | ظهر مفتاح Gemini بصريًا في جلسة سابقة | احتمال انكشاف credential | تدوير مفتاح Gemini الذي ظهر في Render/Google AI Studio وعدم مشاركته |
 
 ## الحكم النهائي
 
 النظام **يعمل حاليًا في المسار الأساسي**: المتجر يستجيب، الأسعار الحية صحيحة، إعداد الدفع الفعال Solana/USDT-SPL، وإنشاء الفاتورة الجديدة لم يعد يعتمد على TRC20 القديم. الحماية الجديدة تمنع إنشاء فاتورة خاطئة إذا عادت قيمة بيئة غير صالحة، وهذا أفضل من عرض عنوان قد يرسل إليه العميل أمواله بالخطأ.
 
-لكن النظام ليس مثبتًا بعد كمنصة إنتاج مالي كاملة؛ ما زال اختبار Mainnet الحقيقي، واستمرارية Cron الخارجي، وتسليم ZIP بعد دفع حقيقي، وwebhooks البريد، وإرسال outreach الحقيقي، أمورًا غير مثبتة أو معطلة عمدًا. لذلك التوصيف الدقيق هو: **جاهز للاختبارات المنضبطة والتشغيل الأساسي، وليس جاهزًا بعد لإطلاق مالي وتسويقي آلي كامل دون خطوات تحقق إضافية**.
+لكن النظام ليس مثبتًا بعد كمنصة إنتاج مالي كاملة؛ ما زال اختبار Mainnet الحقيقي، واستمرارية GitHub Actions المجدولة، وتسليم ZIP بعد دفع حقيقي، وتسجيل Resend الخارجي، وإرسال outreach الحقيقي، أمورًا غير مثبتة أو معطلة عمدًا. لذلك التوصيف الدقيق هو: **جاهز للاختبارات المنضبطة والتشغيل الأساسي، وليس جاهزًا بعد لإطلاق مالي وتسويقي آلي كامل دون خطوات تحقق إضافية**.
 
 ### قرارات المراجعة
 
-لم تُحذف أي طلبات تاريخية. لم تُنفذ تحويلات USDT. لم يُرسل بريد جديد. لم تُشغّل دورة Cron محمية. لم يتم تفعيل `OUTREACH_SEND_ENABLED`. التعديل البرمجي الأخير محفوظ في GitHub بالنسخة `e445e60`، والحالة الحية بعد النشر أظهرت أن إعداد الدفع صالح.
+لم تُحذف أي طلبات تاريخية. لم تُنفذ تحويلات USDT. لم يُرسل بريد للعملاء. شُغّلت دورة Cron محمية واحدة للاختبار، ولم يتم تفعيل `OUTREACH_SEND_ENABLED`. التعديل الأخير محفوظ في GitHub بعد إصلاح دورة الاكتشاف، والحالة الحية أظهرت أن إعداد الدفع صالح.
 
 ## مراجع داخلية
 
@@ -172,7 +172,7 @@ flowchart TD
 2. `src/integrations/solana-rpc-provider.js` — RPC Solana والتحقق من عنوان Solana والمعاملة.
 3. `src/integrations/usdt-verifier.js` — قواعد USDT-SPL والشبكة والتأكيدات.
 4. `src/workers/cron-runner.js` و`src/workers/outreach-worker.js` — دورات queue والإرسال الآمن.
-5. `supabase/migrations/001_initial_schema.sql` و`004_lead_outreach_controls.sql` و`005_outreach_message_timestamps.sql` — المخطط والقيود.
+5. `supabase/migrations/001_initial_schema.sql` و`004_lead_outreach_controls.sql` و`005_outreach_message_timestamps.sql` و`006_set_final_product_prices.sql` و`007_resend_webhook_idempotency.sql` — المخطط والقيود.
 6. `docs/render-workers.md` و`docs/leads-outreach.md` — التشغيل الخارجي ومتطلبات الموافقة.
 7. `docs/resend-deliverability-notes.md` — ملاحظات deliverability ووضع الاختبار.
 
@@ -182,10 +182,32 @@ flowchart TD
 
 الـwebhook أصبح موجودًا وآمنًا في الكود، لكنه لا يصبح نشطًا خارجيًا إلا بعد وضع `RESEND_WEBHOOK_SECRET` في Render وتسجيل عنوان `/api/resend/webhook` في لوحة Resend. لم يتم تسجيل webhook خارجي أو إرسال رسالة اختبار جديدة أثناء هذه الدورة. بقي `OUTREACH_SEND_ENABLED=false` كما هو.
 
-بعد الإصلاحات نجحت فحوصات syntax والاختبارات وعددها **28/28**. بقيت العناصر التشغيلية التي لا يمكن إنجازها من الكود وحده كما هي: اختبار Mainnet الحقيقي، إثبات Cron الخارجي، توثيق نطاق الإرسال، وتدوير مفتاح Gemini الذي ظهر سابقًا.
+بعد الإصلاحات نجحت فحوصات syntax والاختبارات وعددها **30/30**. بقيت العناصر التشغيلية التي لا يمكن إنجازها من الكود وحده: اختبار Mainnet الحقيقي، متابعة الجدول المجدول في GitHub Actions، توثيق نطاق الإرسال، وتدوير مفتاح Gemini الذي ظهر سابقًا.
 
 ## مراجع خارجية للـwebhooks
 
 8. [Resend — Managing Webhooks](https://resend.com/docs/webhooks/introduction) يوضح إنشاء webhook، إعادة المحاولة، والتسليم at-least-once.
 9. [Resend — Event Types](https://resend.com/docs/webhooks/event-types) يوضح أحداث `email.bounced` و`email.complained` و`email.received` وغيرها.
 10. [Resend — Verify Webhooks Requests](https://resend.com/docs/webhooks/verify-webhooks-requests) يوضح ضرورة استخدام raw body ورؤوس Svix وسر التوقيع.
+
+## تحديث الإصلاح الجذري — 25 أغسطس 2026
+
+كشفت سجلات Render أن نبضة `/` كانت تعمل، وأن استدعاء `/api/internal/cron/run` كان يُقبل بـ202، لكن عامل الاكتشاف كان ينتهي بـ`exitCode=1` بسبب استجابة 404 من Stack Overflow. تم إصلاح السبب من جذره بدل تجاهل الخطأ: لم يعد النظام يعتمد على Stack Overflow RSS/Atom المتعطل، بل يستخدم Stack Exchange API العام مع بحث منفصل لكل وسم (`contracts`, `invoicing`, `freelancing`, `freelance`, `small-business`) ثم يطبق الفلترة النصية نفسها قبل الحفظ.
+
+كما أصبح كل جامع مصدر مستقلًا داخل `Promise.allSettled`. إذا فشل DEV أو Stack Exchange أو أي مصدر آخر، تستمر النتائج القادمة من المصادر السليمة وتعود حالة الاكتشاف `partial` مع اسم المصدر والخطأ المختصر، بدل إيقاف الدورة كلها. لا تُعتبر الحالة الجزئية نجاحًا كاملًا؛ لكنها تمنع فقدان كل العملاء بسبب مصدر واحد.
+
+أضيف أيضًا `GET /api/internal/cron/status` المحمي بنفس تفويض Cron. يعرض حالة آخر دورة: `running` أو `completed` أو `failed`، ووقت البداية والنهاية ورقم التشغيل وملخص المصادر، دون عرض أسرار. أصبح رد `202` يعني قبول بدء الدورة فقط، بينما تُعرف النتيجة النهائية من هذا المسار أو من Logs.
+
+أضيفت اختبارات مصدر Stack Exchange واختبار يثبت استمرار الاكتشاف عند فشل مصدر واحد. أصبحت نتيجة الاختبارات **30/30**، مع نجاح فحص syntax لجميع العمال والخادم. الإصلاح محفوظ في commit اللاحق لهذا التحديث وسيُنشر تلقائيًا على Render.
+
+## الحالة بعد الإصلاح الجذري
+
+| العنصر | الحالة |
+|---|---|
+| Stack Overflow/Stack Exchange collector | يستخدم API العام، مع عزل أخطاء كل وسم |
+| فشل مصدر واحد | لا يوقف بقية المصادر؛ النتيجة `partial` مع تفاصيل المصدر |
+| Cron trigger | يقبل الطلب ثم يسجل نتيجة الدورة النهائية |
+| Cron status | متاح عبر `/api/internal/cron/status` بعد تفويض صحيح |
+| GitHub Actions | البديل الآمن المجدول كل 30 دقيقة موجود في `.github/workflows/lead-discovery-cycle.yml` |
+| البريد البارد | متوقف عمدًا |
+| الدفع الحقيقي | لم يُنفذ، ولا يتأثر بهذا الإصلاح |

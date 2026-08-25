@@ -72,13 +72,32 @@ export async function closeDiscoveryWorker() {
 }
 
 export async function runDiscovery({ fetchImpl = fetch } = {}) {
-  const [hackerNews, bluesky, devTo, stackOverflow] = await Promise.all([
-    fetchHackerNewsCandidates({ fetchImpl, limit: 40 }),
-    fetchBlueskyCandidates({ fetchImpl, limit: 12 }),
-    fetchDevToCandidates({ fetchImpl, limit: 10 }),
-    fetchStackOverflowCandidates({ fetchImpl })
-  ]);
-  return saveCandidates([...hackerNews, ...bluesky, ...devTo, ...stackOverflow]);
+  const sourceTasks = [
+    ['hacker_news', () => fetchHackerNewsCandidates({ fetchImpl, limit: 40 })],
+    ['bluesky', () => fetchBlueskyCandidates({ fetchImpl, limit: 12 })],
+    ['dev_to', () => fetchDevToCandidates({ fetchImpl, limit: 10 })],
+    ['stack_overflow', () => fetchStackOverflowCandidates({ fetchImpl })]
+  ];
+  const settled = await Promise.allSettled(sourceTasks.map(([, task]) => task()));
+  const sources = {};
+  const allItems = [];
+  settled.forEach((result, index) => {
+    const [source] = sourceTasks[index];
+    if (result.status === 'fulfilled') {
+      sources[source] = { mode: 'ok', discovered: result.value.length };
+      allItems.push(...result.value);
+    } else {
+      sources[source] = { mode: 'error', error: String(result.reason?.message || result.reason).slice(0, 500) };
+    }
+  });
+  const failedSources = Object.entries(sources).filter(([, result]) => result.mode === 'error').map(([source]) => source);
+  const saved = await saveCandidates(allItems);
+  return {
+    ...saved,
+    mode: failedSources.length ? 'partial' : saved.mode,
+    sources,
+    failedSources
+  };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

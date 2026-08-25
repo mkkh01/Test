@@ -4,7 +4,7 @@ The web service handles the storefront and synchronous Solana transaction-signat
 
 ## Recommended low-cost operation
 
-Create one Render Cron Job from this repository with command `npm run worker:cron` and schedule `*/10 * * * *` UTC. The job runs payment rechecks, lead analysis, public-source discovery, and cleanup once, then exits. Render documents that cron jobs must exit after work and charges are based on active runtime, with a minimum monthly charge per cron job. The first payment submission is synchronous; the cron job is a recovery path for transactions still waiting for confirmations.
+Keep the Render Web Service as the only deployed service and use the repository workflow `.github/workflows/lead-discovery-cycle.yml`. GitHub Actions calls the protected Render endpoint every 30 minutes at minutes 17 and 47 UTC using its short-lived `GITHUB_TOKEN`; the token is not stored in the repository. The endpoint starts one cycle, while the worker performs payment rechecks, lead analysis, public-source discovery, and cleanup. The first payment submission is synchronous; the worker remains a recovery path for transactions still waiting for confirmations.
 
 ## Always-on operation
 
@@ -14,18 +14,26 @@ For continuous queue processing, create a Render Background Worker with command 
 
 The web service and worker/cron must share `DATABASE_URL`, `DB_POOL_MAX`, `SOLANA_RPC_URL`, `SOLANA_COMMITMENT`, `USDT_NETWORK`, `USDT_RECEIVING_ADDRESS`, `SOLANA_USDT_MINT`, `USDT_TOKEN_CONTRACT`, `USDT_TOKEN_DECIMALS`, `USDT_MIN_CONFIRMATIONS`, `GEMINI_MODEL`, `GEMINI_API_KEY_1..5`, `GEMINI_API_KEY_COUNT`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_WEBHOOK_SECRET`. Secrets must be entered in Render, not committed to GitHub.
 
-## External Cron trigger every 30 minutes
+## GitHub Actions trigger every 30 minutes
 
-If the Render Web Service is the only deployed service, an external cron provider can call the protected endpoint every 30 minutes. Use the provider's six-field or five-field syntax as required by that provider; for standard five-field cron use `*/30 * * * *` UTC.
+The current low-cost trigger is `.github/workflows/lead-discovery-cycle.yml`. Its schedule is `17,47 * * * *` UTC, which means one run every 30 minutes while avoiding the busiest exact hour boundaries. It also supports manual `workflow_dispatch` for one controlled test. The workflow calls:
 
 ```text
 POST https://test-p2h3.onrender.com/api/internal/cron/run
-Authorization: Bearer <CRON_TRIGGER_SECRET>
+Authorization: Bearer <short-lived GitHub Actions token>
+X-GitHub-Actions: true
+X-GitHub-Repository: mkkh01/Test
 ```
 
-The service returns `202` immediately, starts one child process, and logs the discovery, analysis, and payment summary. If a previous cycle is still running, it returns `409` and the cron provider should record the run as already in progress rather than retrying aggressively. The secret must be created by the owner, entered in Render as `CRON_TRIGGER_SECRET`, and entered in the cron provider's Authorization header; it must never be placed in the URL or committed to GitHub. The endpoint supports GET for providers that cannot issue POST, but POST is preferred.
+The server validates the token against the GitHub API and checks the exact repository before starting a cycle. The response `202` means only that the cycle was accepted; the final result is available from the protected endpoint below and in Render Logs:
 
-Each cycle discovers public Hacker News, Bluesky, DEV Community, and Stack Overflow candidates, then analyzes newly queued candidates with Gemini and processes payment jobs. Public leads create drafts only. The outreach worker can process at most one previously approved message per cycle, requires `OUTREACH_SEND_ENABLED=true`, and refuses the shared `onboarding@resend.dev` sender; it never sends unapproved or bulk outreach.
+```text
+GET https://test-p2h3.onrender.com/api/internal/cron/status
+```
+
+The status response distinguishes `running`, `completed`, and `failed` and includes the source-level summary without secrets. If a previous cycle is still running, the trigger returns `409`. The older external cron endpoint remains available for compatibility, but cron-job.org is no longer needed.
+
+Each cycle discovers public Hacker News, Bluesky, DEV Community, and Stack Exchange API candidates, then analyzes newly queued candidates with Gemini and processes payment jobs. Each source is isolated: a temporary failure in one source produces a partial summary and does not discard candidates from healthy sources. Public leads create drafts only. The outreach worker can process at most one previously approved message per cycle, requires `OUTREACH_SEND_ENABLED=true`, and refuses the shared `onboarding@resend.dev` sender; it never sends unapproved or bulk outreach.
 
 ## Safety
 
