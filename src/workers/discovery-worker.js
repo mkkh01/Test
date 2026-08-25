@@ -86,7 +86,7 @@ export async function runDiscovery({ fetchImpl = fetch } = {}) {
     ['google_news', () => fetchGoogleNewsCandidates({ fetchImpl, limit: 8 }), configured.googleNewsConfigured],
     ['github_issues', () => fetchGitHubIssueCandidates({ fetchImpl, limit: 25 }), configured.githubConfigured]
   ];
-  const settled = await Promise.allSettled(sourceTasks.map(([, task]) => task()));
+  const settled = await Promise.allSettled(sourceTasks.map(([, task, isConfigured]) => isConfigured ? task() : Promise.resolve([])));
   const sources = {};
   const allItems = [];
   settled.forEach((result, index) => {

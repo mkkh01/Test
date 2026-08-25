@@ -133,6 +133,19 @@ test('GitHub issue search maps public issue authors without requiring a credenti
   assert.match(items[0].body, /extra revisions/);
 });
 
+test('GitHub issue search falls back after a 422 query response', async () => {
+  let calls = 0;
+  const items = await fetchGitHubIssueCandidates({ terms: ['scope creep'], limit: 5, fetchImpl: async (url, options = {}) => {
+    calls += 1;
+    assert.ok(url.includes('api.github.com/search/issues'));
+    assert.equal(options.headers['User-Agent'], 'client-payment-scope-protection-kit');
+    if (calls === 1) return { ok: false, status: 422, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ items: [{ id: 45, html_url: 'https://github.com/example/repo/issues/5', title: 'Scope creep problem', body: 'Extra revisions requested.', user: { login: 'public_author' }, created_at: '2026-08-23T10:00:00Z' }] }) };
+  } });
+  assert.ok(calls >= 2);
+  assert.equal(items[0].authorHandle, 'public_author');
+});
+
 test('Stack Exchange candidate fetch uses the public API and preserves matching questions', async () => {
   const requestedUrls = [];
   const items = await fetchStackOverflowCandidates({ terms: ['late invoice'], limit: 2, fetchImpl: async (url) => {
@@ -150,7 +163,7 @@ test('discovery keeps successful sources when one source fails', async () => {
     if (url.includes('dev.to')) throw new Error('DEV temporary failure');
     if (url.includes('hacker-news.firebaseio.com/v0/newstories')) return { ok: true, status: 200, json: async () => [1] };
     if (url.includes('hacker-news.firebaseio.com/v0/item/1')) return { ok: true, status: 200, json: async () => ({ type: 'story', id: 1, title: 'Late invoice question', text: 'My client has not paid.', by: 'public-author', time: 1787479200 }) };
-    if (url.includes('public.api.bsky.app')) return { ok: true, status: 200, json: async () => ({ posts: [] }) };
+    if (url.includes('public.api.bsky.app')) throw new Error('disabled Bluesky source must not be called');
     if (url.includes('api.stackexchange.com')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
     if (url.includes('news.google.com/rss/search')) return { ok: true, status: 200, text: async () => '<rss><channel></channel></rss>' };
     if (url.includes('discourse.webflow.com') || url.includes('forum.ghost.org')) return { ok: true, status: 200, json: async () => ({ topics: [] }) };
