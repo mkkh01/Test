@@ -2,7 +2,7 @@ import 'dotenv/config';
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import pg from 'pg';
-import { fetchHackerNewsCandidates, fetchBlueskyCandidates, fetchDevToCandidates, fetchStackOverflowCandidates, fetchRedditCandidates, fetchXCandidates, fetchBraveSearchCandidates, fetchGoogleNewsCandidates, fetchGitHubIssueCandidates, publicSourceStatus, deduplicateCandidates } from '../discovery/public-sources.js';
+import { fetchHackerNewsCandidates, fetchBlueskyCandidates, fetchDevToCandidates, fetchStackOverflowCandidates, fetchStackExchangeCommunityCandidates, fetchDiscourseCandidates, fetchRedditCandidates, fetchXCandidates, fetchBraveSearchCandidates, fetchGoogleNewsCandidates, fetchGitHubIssueCandidates, publicSourceStatus, deduplicateCandidates } from '../discovery/public-sources.js';
 
 const configuredSupabaseValue = process.env.SUPABASE_URL?.trim() || '';
 const supabaseUrl = configuredSupabaseValue.startsWith('http://') || configuredSupabaseValue.startsWith('https://') ? configuredSupabaseValue : '';
@@ -78,6 +78,8 @@ export async function runDiscovery({ fetchImpl = fetch } = {}) {
     ['bluesky', () => fetchBlueskyCandidates({ fetchImpl, limit: 12 }), true],
     ['dev_to', () => fetchDevToCandidates({ fetchImpl, limit: 10 }), true],
     ['stack_overflow', () => fetchStackOverflowCandidates({ fetchImpl }), true],
+    ['stack_exchange_communities', () => fetchStackExchangeCommunityCandidates({ fetchImpl, limit: 20 }), true],
+    ['discourse_forums', () => fetchDiscourseCandidates({ fetchImpl, limit: 12 }), true],
     ['reddit', () => fetchRedditCandidates({ fetchImpl, limit: 12 }), configured.redditConfigured],
     ['x', () => fetchXCandidates({ fetchImpl, limit: 25 }), configured.xConfigured],
     ['brave_search', () => fetchBraveSearchCandidates({ fetchImpl, limit: 20 }), configured.braveConfigured],

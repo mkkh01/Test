@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deduplicateCandidates, parseRss, scoreCandidate, fetchDevToCandidates, fetchStackOverflowCandidates, fetchRedditCandidates, fetchXCandidates, fetchBraveSearchCandidates, fetchGoogleNewsCandidates, fetchGitHubIssueCandidates } from '../src/discovery/public-sources.js';
+import { deduplicateCandidates, parseRss, scoreCandidate, fetchDevToCandidates, fetchStackOverflowCandidates, fetchRedditCandidates, fetchXCandidates, fetchBraveSearchCandidates, fetchGoogleNewsCandidates, fetchStackExchangeCommunityCandidates, fetchDiscourseCandidates, fetchGitHubIssueCandidates } from '../src/discovery/public-sources.js';
 import { runDiscovery } from '../src/workers/discovery-worker.js';
 import { UsdtVerifier } from '../src/integrations/usdt-verifier.js';
 import { createDownloadToken, hashDownloadToken, tokenMatches, isTokenExpired } from '../src/delivery/download-token.js';
@@ -79,6 +79,26 @@ test('X candidate fetch maps public author expansion and excludes protected acco
   assert.equal(items[0].sourceUrl, 'https://x.com/public_author/status/123');
 });
 
+test('Stack Exchange community search maps public question authors', async () => {
+  const items = await fetchStackExchangeCommunityCandidates({ sites: ['freelancing'], terms: ['late payment'], limit: 10, fetchImpl: async (url) => {
+    assert.ok(url.includes('api.stackexchange.com/2.3/search/advanced'));
+    return { ok: true, status: 200, json: async () => ({ items: [{ question_id: 5, link: 'https://freelancing.stackexchange.com/q/5', title: 'Late payment question', body: 'My client has not paid.', owner: { display_name: 'public_author' }, creation_date: 1787479200 }] }) };
+  } });
+  assert.equal(items[0].source, 'stack_exchange');
+  assert.equal(items[0].authorHandle, 'public_author');
+  assert.match(items[0].body, /client has not paid/);
+});
+
+test('Discourse forum search maps public topics without authentication', async () => {
+  const items = await fetchDiscourseCandidates({ forums: ['community.example.test'], terms: ['scope creep'], limit: 10, fetchImpl: async (url) => {
+    assert.ok(url.startsWith('https://community.example.test/search.json'));
+    return { ok: true, status: 200, json: async () => ({ topics: [{ id: 7, slug: 'scope-creep', title: 'Scope creep problem', blurb: 'How do I handle extra revisions?', username: 'public_author', created_at: '2026-08-23T10:00:00Z' }] }) };
+  } });
+  assert.equal(items[0].source, 'discourse');
+  assert.equal(items[0].sourceUrl, 'https://community.example.test/t/scope-creep/7');
+  assert.equal(items[0].authorHandle, 'public_author');
+});
+
 test('Brave search maps public indexed pages without scraping Google results', async () => {
   process.env.BRAVE_SEARCH_API_KEY = 'brave-test-token';
   const items = await fetchBraveSearchCandidates({ terms: ['late invoice'], limit: 5, fetchImpl: async (url, options = {}) => {
@@ -133,12 +153,15 @@ test('discovery keeps successful sources when one source fails', async () => {
     if (url.includes('public.api.bsky.app')) return { ok: true, status: 200, json: async () => ({ posts: [] }) };
     if (url.includes('api.stackexchange.com')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
     if (url.includes('news.google.com/rss/search')) return { ok: true, status: 200, text: async () => '<rss><channel></channel></rss>' };
+    if (url.includes('discourse.webflow.com') || url.includes('forum.ghost.org')) return { ok: true, status: 200, json: async () => ({ topics: [] }) };
     if (url.includes('api.github.com/search/issues')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
     throw new Error(`unexpected URL: ${url}`);
   };
   const summary = await runDiscovery({ fetchImpl });
   assert.equal(summary.mode, 'partial');
-  assert.deepEqual(summary.failedSources, ['dev_to']);
+  assert.ok(summary.failedSources.includes('dev_to'));
+  assert.equal(summary.sources.stack_exchange_communities.mode, 'ok');
+  assert.equal(summary.sources.discourse_forums.mode, 'ok');
   assert.equal(summary.sources.hacker_news.mode, 'ok');
   assert.ok(summary.discovered >= 1);
 });

@@ -119,6 +119,62 @@ export async function fetchStackOverflowCandidates({ fetchImpl = fetch, terms = 
   return results.filter((item) => matchesTerms(item, terms));
 }
 
+export async function fetchStackExchangeCommunityCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, sites = ['freelancing', 'pm', 'graphicdesign', 'webmasters'], limit = 20 } = {}) {
+  const results = [];
+  for (const site of sites) {
+    const params = new URLSearchParams({ order: 'desc', sort: 'creation', q: terms.slice(0, 6).join(' '), site, pagesize: String(boundedLimit(limit, 20)), filter: 'withbody' });
+    const response = await fetchImpl(`https://api.stackexchange.com/2.3/search/advanced?${params.toString()}`, { headers: { Accept: 'application/json' } });
+    if (!response.ok) continue;
+    const payload = await response.json();
+    for (const question of payload.items || []) {
+      results.push({
+        source: 'stack_exchange',
+        externalId: String(question.question_id || question.link),
+        sourceUrl: question.link,
+        title: clean(question.title),
+        body: clean(question.body || question.title),
+        authorHandle: clean(question.owner?.display_name, 120),
+        publishedAt: question.creation_date ? new Date(question.creation_date * 1000).toISOString() : null
+      });
+    }
+  }
+  return results.filter((item) => matchesTerms(item, terms));
+}
+
+function defaultDiscourseForums() {
+  return String(process.env.DISCOURSE_PUBLIC_FORUMS || 'discourse.webflow.com,forum.ghost.org').split(',').map((host) => host.trim().replace(/^https?:\/\//, '').replace(/\/$/, '')).filter(Boolean).slice(0, 8);
+}
+
+export async function fetchDiscourseCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 20, forums = defaultDiscourseForums() } = {}) {
+  const results = [];
+  for (const host of forums) {
+    for (const term of terms.slice(0, 6)) {
+      const params = new URLSearchParams({ q: term });
+      try {
+        const response = await fetchImpl(`https://${host}/search.json?${params.toString()}`, { headers: { Accept: 'application/json' } });
+        if (!response.ok) continue;
+        const payload = await response.json();
+        for (const topic of (payload.topics || []).slice(0, boundedLimit(limit, 20))) {
+          const topicPath = topic.url || (topic.slug && topic.id ? `/t/${topic.slug}/${topic.id}` : '');
+          if (!topicPath) continue;
+          results.push({
+            source: 'discourse',
+            externalId: `${host}:${topic.id || topicPath}`,
+            sourceUrl: topicPath.startsWith('http') ? topicPath : `https://${host}${topicPath}`,
+            title: clean(topic.title),
+            body: clean(topic.blurb || topic.excerpt || topic.title),
+            authorHandle: clean(topic.username || topic.last_poster_username, 120),
+            publishedAt: topic.created_at || topic.last_posted_at || null
+          });
+        }
+      } catch {
+        // One public forum may be unavailable; continue with the remaining forums.
+      }
+    }
+  }
+  return results.filter((item) => matchesTerms(item, terms));
+}
+
 export async function fetchBlueskyCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 25 } = {}) {
   const results = [];
   for (const term of terms.slice(0, 6)) {
