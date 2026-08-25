@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deduplicateCandidates, parseRss, scoreCandidate, fetchDevToCandidates, fetchStackOverflowCandidates, fetchRedditCandidates, fetchXCandidates, fetchGitHubIssueCandidates } from '../src/discovery/public-sources.js';
+import { deduplicateCandidates, parseRss, scoreCandidate, fetchDevToCandidates, fetchStackOverflowCandidates, fetchRedditCandidates, fetchXCandidates, fetchBraveSearchCandidates, fetchGoogleNewsCandidates, fetchGitHubIssueCandidates } from '../src/discovery/public-sources.js';
 import { runDiscovery } from '../src/workers/discovery-worker.js';
 import { UsdtVerifier } from '../src/integrations/usdt-verifier.js';
 import { createDownloadToken, hashDownloadToken, tokenMatches, isTokenExpired } from '../src/delivery/download-token.js';
@@ -79,6 +79,29 @@ test('X candidate fetch maps public author expansion and excludes protected acco
   assert.equal(items[0].sourceUrl, 'https://x.com/public_author/status/123');
 });
 
+test('Brave search maps public indexed pages without scraping Google results', async () => {
+  process.env.BRAVE_SEARCH_API_KEY = 'brave-test-token';
+  const items = await fetchBraveSearchCandidates({ terms: ['late invoice'], limit: 5, fetchImpl: async (url, options = {}) => {
+    assert.ok(url.includes('api.search.brave.com/res/v1/web/search'));
+    assert.equal(options.headers['X-Subscription-Token'], 'brave-test-token');
+    return { ok: true, status: 200, json: async () => ({ web: { results: [{ url: 'https://www.reddit.com/r/freelance/comments/abc/late_invoice/', title: 'Late invoice question', description: 'My client has not paid.' }] } }) };
+  } });
+  delete process.env.BRAVE_SEARCH_API_KEY;
+  assert.equal(items[0].source, 'brave_search');
+  assert.equal(items[0].sourceUrl, 'https://www.reddit.com/r/freelance/comments/abc/late_invoice/');
+  assert.match(items[0].body, /not paid/);
+});
+
+test('Google News RSS maps public search results without HTML scraping', async () => {
+  const items = await fetchGoogleNewsCandidates({ terms: ['late invoice'], limit: 2, fetchImpl: async (url, options = {}) => {
+    assert.ok(url.includes('news.google.com/rss/search'));
+    assert.ok(options.headers.Accept.includes('application/rss+xml'));
+    return { ok: true, status: 200, text: async () => '<rss><channel><item><title>Late invoice report</title><link>https://example.test/public-post</link><description>My client has not paid.</description></item></channel></rss>' };
+  } });
+  assert.equal(items[0].source, 'google_news');
+  assert.equal(items[0].sourceUrl, 'https://example.test/public-post');
+});
+
 test('GitHub issue search maps public issue authors without requiring a credential', async () => {
   const items = await fetchGitHubIssueCandidates({ terms: ['scope creep'], limit: 10, fetchImpl: async (url, options = {}) => {
     assert.ok(url.includes('api.github.com/search/issues'));
@@ -109,6 +132,7 @@ test('discovery keeps successful sources when one source fails', async () => {
     if (url.includes('hacker-news.firebaseio.com/v0/item/1')) return { ok: true, status: 200, json: async () => ({ type: 'story', id: 1, title: 'Late invoice question', text: 'My client has not paid.', by: 'public-author', time: 1787479200 }) };
     if (url.includes('public.api.bsky.app')) return { ok: true, status: 200, json: async () => ({ posts: [] }) };
     if (url.includes('api.stackexchange.com')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    if (url.includes('news.google.com/rss/search')) return { ok: true, status: 200, text: async () => '<rss><channel></channel></rss>' };
     if (url.includes('api.github.com/search/issues')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
     throw new Error(`unexpected URL: ${url}`);
   };

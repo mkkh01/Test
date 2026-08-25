@@ -78,11 +78,11 @@ flowchart TD
 
 ## الدورة الخامسة: اكتشاف العملاء والمسودات
 
-يستخدم `discovery-worker.js` مصادر عامة فقط: Hacker News وBluesky وDEV Community وStack Exchange API العام، مع Reddit OAuth وX Recent Search وGitHub Issues كخيارات إضافية. Reddit وX لا يعملان إلا بعد إضافة بيانات الاعتماد الاختيارية إلى Render؛ GitHub Issues يعمل عبر endpoint العام. العناصر تُحفظ في `source_items` مع deduplication، ثم تُنشأ وظائف تحليل في `jobs`. يقوم `lead-analysis-worker.js` بإرسال النص العام إلى Gemini ويخزن النتيجة في `leads` و`lead_analyses` و`outreach_messages`.
+يستخدم `discovery-worker.js` مصادر عامة فقط: Hacker News وBluesky وDEV Community وStack Exchange API العام، مع Reddit OAuth وX Recent Search وGitHub Issues وBrave Search وGoogle News RSS كخيارات إضافية. Reddit وX وBrave لا تعمل إلا بعد إضافة بيانات الاعتماد الاختيارية إلى Render؛ GitHub Issues يعمل عبر endpoint العام، وGoogle News RSS هو مسار قراءة عام محدود لا يعتمد على كشط صفحة نتائج Google. العناصر تُحفظ في `source_items` مع deduplication، ثم تُنشأ وظائف تحليل في `jobs`. يقوم `lead-analysis-worker.js` بإرسال النص العام إلى Gemini ويخزن النتيجة في `leads` و`lead_analyses` و`outreach_messages`.
 
 النتيجة الطبيعية لهذه الدورة هي **مسودة** لا رسالة مرسلة. كل سجل يعرض المنصة، اسم الحساب العام، رابط المنشور، مقتطف المشكلة، النتيجة، المنتج المقترح، ومسودة إنجليزية قصيرة. كل مسودة يجب أن تحمل `approval_required=true` و`needs_human_review=true`. لوحة `/admin.html` تعرض المصدر والدليل والنتيجة والمسودة والبريد العام وحالة الرسالة وحالة البيع. الموافقة الفردية تحتاج بريدًا عامًا وموافقة صريحة، وتنتج رسالة queued مع سجل تدقيق؛ المستخدم هو من يرسل العرض يدويًا من حسابه.
 
-تمت معالجة ملاحظة جودة جامع DEV: العبارات متعددة الكلمات تُحوّل الآن إلى tags مثل `late-invoice` مع استمرار الفلترة النصية النهائية. كما تُستبعد حسابات X المحمية، ولا تُجمع بيانات خاصة أو رسائل مباشرة أو كلمات مرور أو بريد غير منشور علنًا.
+تمت معالجة ملاحظة جودة جامع DEV: العبارات متعددة الكلمات تُحوّل الآن إلى tags مثل `late-invoice` مع استمرار الفلترة النصية النهائية. كما تُستبعد حسابات X المحمية، ولا تُجمع بيانات خاصة أو رسائل مباشرة أو كلمات مرور أو بريد غير منشور علنًا. Google Custom Search JSON API مغلق للعملاء الجدد، لذلك لا يعتمد النظام عليه؛ يمكن استخدام Brave Search API بمفتاح اختياري أو Google News RSS المحدود بدلًا منه.
 
 ## الدورة السادسة: Cron والعمال
 

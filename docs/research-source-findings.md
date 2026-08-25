@@ -25,3 +25,11 @@
 مرجع Reddit الرسمي للبحث: https://www.reddit.com/dev/api/oauth/#GET_search. يوضح المرجع أن البحث يعيد نتائج عامة عبر معاملات مثل `q`, `limit`, `sort`, و` t`، مع حد أقصى مذكور للنتائج في الطلب الواحد. سيستخدم التطبيق endpoint OAuth الموثق فقط، ولن يعتمد على robots.txt أو scraping لصفحات المستخدمين.
 
 مرجع X الرسمي: https://docs.x.com/x-api/posts/search-recent-posts. نقطة `GET /2/tweets/search/recent` تتطلب Authorization header، وتقبل query بطول 1–4096، و`max_results` بين 10 و100، وتدعم `post.fields` مثل `created_at`, `lang`, `text` وexpansion لـ`author_id` مع `user.fields=username,name`. قيد `start_time` يجب أن يكون داخل آخر 7 أيام. سيبني التطبيق رابط المنشور من `username` و`id`، ويستبعد إعادة النشر ويقيد البحث بالإنجليزية حيث يلزم.
+
+## Google والبديل الواسع
+
+المصدر الرسمي من Google: https://developers.google.com/custom-search/v1/overview. توضح Google أن Custom Search JSON API مغلق للعملاء الجدد، وأن العملاء الحاليين لديهم مهلة انتقال حتى 1 يناير 2027. لذلك لا ينبغي بناء النظام على Google Custom Search API كحل جديد. تقترح الصفحة Vertex AI Search للبحث في عدد محدود من النطاقات، أو التواصل مع Google بخصوص حل البحث الكامل. كما أن Custom Search JSON API يتطلب API key ومحرك بحث معرفًا.
+
+بديل بحث عام موثق: https://brave.com/search/api/. يقدم Brave Search API بحث الويب عبر endpoint رسمي باستخدام `X-Subscription-Token`، وتذكر الصفحة رصيدًا مجانيًا شهريًا بقيمة 5 دولارات. هذا لا يحتاج إلى إنشاء تطبيق داخل Reddit أو X، لكنه يحتاج حساب Brave ومفتاح API، وقد يتطلب وسيلة دفع وفق إعداد الحساب. سيبقى استخدامه محدودًا ومعدلًا، مع تخزين النتائج العامة الضرورية فقط.
+
+لا ينبغي كشط صفحات نتائج Google HTML أو إرسال استعلامات آلية مباشرة إلى Google؛ المسار الأنسب هو Brave Search API كطبقة بحث عامة، مع إبقاء المصادر الرسمية المباشرة مثل GitHub وStack Exchange وDEV وBluesky وReddit/X اختيارية.

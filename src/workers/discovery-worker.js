@@ -2,7 +2,7 @@ import 'dotenv/config';
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import pg from 'pg';
-import { fetchHackerNewsCandidates, fetchBlueskyCandidates, fetchDevToCandidates, fetchStackOverflowCandidates, fetchRedditCandidates, fetchXCandidates, fetchGitHubIssueCandidates, publicSourceStatus, deduplicateCandidates } from '../discovery/public-sources.js';
+import { fetchHackerNewsCandidates, fetchBlueskyCandidates, fetchDevToCandidates, fetchStackOverflowCandidates, fetchRedditCandidates, fetchXCandidates, fetchBraveSearchCandidates, fetchGoogleNewsCandidates, fetchGitHubIssueCandidates, publicSourceStatus, deduplicateCandidates } from '../discovery/public-sources.js';
 
 const configuredSupabaseValue = process.env.SUPABASE_URL?.trim() || '';
 const supabaseUrl = configuredSupabaseValue.startsWith('http://') || configuredSupabaseValue.startsWith('https://') ? configuredSupabaseValue : '';
@@ -80,6 +80,8 @@ export async function runDiscovery({ fetchImpl = fetch } = {}) {
     ['stack_overflow', () => fetchStackOverflowCandidates({ fetchImpl }), true],
     ['reddit', () => fetchRedditCandidates({ fetchImpl, limit: 12 }), configured.redditConfigured],
     ['x', () => fetchXCandidates({ fetchImpl, limit: 25 }), configured.xConfigured],
+    ['brave_search', () => fetchBraveSearchCandidates({ fetchImpl, limit: 20 }), configured.braveConfigured],
+    ['google_news', () => fetchGoogleNewsCandidates({ fetchImpl, limit: 8 }), configured.googleNewsConfigured],
     ['github_issues', () => fetchGitHubIssueCandidates({ fetchImpl, limit: 25 }), configured.githubConfigured]
   ];
   const settled = await Promise.allSettled(sourceTasks.map(([, task]) => task()));

@@ -22,6 +22,8 @@ export function publicSourceStatus() {
   return {
     redditConfigured: Boolean(process.env.REDDIT_ACCESS_TOKEN?.trim() || (process.env.REDDIT_CLIENT_ID?.trim() && process.env.REDDIT_CLIENT_SECRET?.trim())),
     xConfigured: Boolean((process.env.X_API_BEARER_TOKEN || process.env.X_BEARER_TOKEN)?.trim()),
+    braveConfigured: Boolean((process.env.BRAVE_SEARCH_API_KEY || process.env.BRAVE_API_KEY)?.trim()),
+    googleNewsConfigured: true,
     githubConfigured: true
   };
 }
@@ -217,6 +219,53 @@ export async function fetchXCandidates({ fetchImpl = fetch, terms = DEFAULT_TERM
       protectedAuthor: Boolean(user?.protected)
     };
   }).filter((item) => item.authorHandle && !item.protectedAuthor && matchesTerms(item, terms));
+}
+
+function publicHandleFromUrl(value) {
+  try {
+    const url = new URL(value);
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (['x.com', 'twitter.com'].includes(url.hostname) && parts[0] && parts[1] === 'status') return parts[0].slice(0, 120);
+    if (['reddit.com', 'www.reddit.com'].includes(url.hostname)) {
+      const userIndex = parts.findIndex((part) => part === 'u' || part === 'user');
+      if (userIndex >= 0 && parts[userIndex + 1]) return parts[userIndex + 1].slice(0, 120);
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+export async function fetchBraveSearchCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 20 } = {}) {
+  const token = (process.env.BRAVE_SEARCH_API_KEY || process.env.BRAVE_API_KEY)?.trim();
+  if (!token) return [];
+  const termQuery = terms.slice(0, 8).map((term) => `"${String(term).replace(/"/g, '')}"`).join(' OR ');
+  const query = `(${termQuery}) (site:reddit.com OR site:x.com OR site:github.com OR site:dev.to OR site:indiehackers.com)`;
+  const params = new URLSearchParams({ q: query, count: String(Math.max(1, Math.min(boundedLimit(limit, 20), 20))), search_lang: 'en', country: 'us', safesearch: 'moderate' });
+  const response = await fetchImpl(`https://api.search.brave.com/res/v1/web/search?${params.toString()}`, { headers: { Accept: 'application/json', 'X-Subscription-Token': token } });
+  if (!response.ok) throw new Error(`Brave Search request failed: ${response.status}`);
+  const payload = await response.json();
+  return (payload.web?.results || []).map((result) => ({
+    source: 'brave_search',
+    externalId: String(result.url || result.title),
+    sourceUrl: result.url,
+    title: clean(result.title),
+    body: clean(result.description || result.title),
+    authorHandle: publicHandleFromUrl(result.url),
+    publishedAt: result.age || null
+  })).filter((item) => item.sourceUrl && matchesTerms(item, terms));
+}
+
+export async function fetchGoogleNewsCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 10 } = {}) {
+  const results = [];
+  for (const term of terms.slice(0, 6)) {
+    const params = new URLSearchParams({ q: term, hl: 'en-US', gl: 'US', ceid: 'US:en' });
+    const response = await fetchImpl(`https://news.google.com/rss/search?${params.toString()}`, { headers: { Accept: 'application/rss+xml, application/xml, text/xml' } });
+    if (!response.ok) continue;
+    const items = parseRss(await response.text(), { source: 'google_news', baseUrl: 'https://news.google.com/' });
+    results.push(...items.slice(0, boundedLimit(limit, 10)));
+  }
+  return results.filter((item) => matchesTerms(item, terms));
 }
 
 export async function fetchGitHubIssueCandidates({ fetchImpl = fetch, terms = DEFAULT_TERMS, limit = 25 } = {}) {

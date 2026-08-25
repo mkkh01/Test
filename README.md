@@ -49,6 +49,7 @@ Required later integrations:
 - `PUBLIC_BASE_URL`
 - Optional `REDDIT_ACCESS_TOKEN` or `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET`, plus a descriptive `REDDIT_USER_AGENT`
 - Optional `X_API_BEARER_TOKEN` for X Recent Search
+- Optional `BRAVE_SEARCH_API_KEY` for broad public web search without Reddit/X app access
 
 The five Gemini keys are for reliability and controlled rotation, not for bypassing provider quotas or terms. The application will record key health, apply per-key limits, and stop or fall back to deterministic rules when no key is available.
 
@@ -66,10 +67,10 @@ The customer creates an order and receives a customer-scoped status token. The s
 - `src/integrations/telegram-bot.js` provides webhook and message helpers while remaining disabled without `TELEGRAM_BOT_TOKEN`.
 - `src/integrations/usdt-verifier.js` validates invoice data and transaction results through the Solana provider; it never handles a private key.
 - `src/integrations/solana-rpc-provider.js` reads finalized Solana transactions and SPL token balance changes through JSON-RPC; it requires no signing key.
-- `src/discovery/public-sources.js` includes public Hacker News, Bluesky, DEV, Stack Exchange, Reddit, X Recent Search, and GitHub Issues collectors with keyword filtering, public-author mapping, deduplication, and a deterministic fit score.
+- `src/discovery/public-sources.js` includes public Hacker News, Bluesky, DEV, Stack Exchange, Reddit, X Recent Search, GitHub Issues, Brave Search, and Google News RSS collectors with keyword filtering, public-author mapping, deduplication, and a deterministic fit score.
 - `src/workers/discovery-worker.js` collects candidates and queues lead-analysis jobs in Supabase; each source is isolated, and disabled or failed sources do not stop successful sources.
 
-Real production credentials remain in Render only. The provider and webhook code are tested with injected adapters locally; live payment acceptance should be tested first with a small controlled transaction.
+Real production credentials remain in Render only. Google Custom Search JSON API is not used because Google states that it is closed to new customers; the broad search path uses optional Brave Search API or public Google News RSS instead. The provider and webhook code are tested with injected adapters locally; live payment acceptance should be tested first with a small controlled transaction.
 
 ## Database
 
@@ -95,7 +96,7 @@ The payment module verifies a successful transaction, correct network, correct t
 Approved public sources → deduplicate → keyword/rule filter → public account + post URL → Gemini analysis → lead score → English message draft → human review → manual send by owner
 ```
 
-Each lead record shows the public platform, account handle, source post URL, problem excerpt, fit score, recommended kit, and a short English draft. The system does not claim to know a private email address or purchase intent. It will not scrape private data, bypass CAPTCHAs, create fake accounts, send direct messages, publish replies, or send uncontrolled bulk messages. Reddit uses OAuth and a descriptive User-Agent when configured; X uses the official Recent Search endpoint and only returns public, unprotected authors. Source connectors are enabled only after confirming their official capabilities and terms.
+Each lead record shows the public platform, account handle when available, source URL, problem excerpt, fit score, recommended kit, and a short English draft. The system does not claim to know a private email address or purchase intent. It will not scrape private data, bypass CAPTCHAs, create fake accounts, send direct messages, publish replies, or send uncontrolled bulk messages. Reddit uses OAuth and a descriptive User-Agent when configured; X uses the official Recent Search endpoint and only returns public, unprotected authors. Brave provides the broad web-search layer when its optional key is configured; Google News RSS is a best-effort public feed, not Google result-page scraping. Source connectors are enabled only after confirming their official capabilities and terms.
 
 ## Quality and security principles
 
